@@ -13,7 +13,7 @@ class ModelInference:
             logger.info(f"Loading model: {settings.MODEL_NAME}")
             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 settings.MODEL_NAME,
-                torch_dtype=getattr(torch, settings.TORCH_DTYPE.upper(), torch.float32),
+                torch_dtype=getattr(torch, settings.TORCH_DTYPE.upper(), torch.float32) if settings.TORCH_DTYPE != "auto" else "auto",
                 device_map=settings.DEVICE_MAP
             )
             logger.info("Model loaded successfully.")
@@ -28,7 +28,11 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Failed to load processor: {e}")
             raise e
-                
+
+        # Determine device
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Using device: {self.device}")
+
     def warmup(self):
         """Perform model warmup inference"""
         try:
@@ -40,6 +44,7 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> str:
         try:
+            # Format messages as in the example
             messages = [
                 {
                     "role": "user",
@@ -53,6 +58,7 @@ class ModelInference:
                 }
             ]
 
+            # Prepare inputs exactly as in the example
             text = self.processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
@@ -67,15 +73,20 @@ class ModelInference:
                 return_tensors="pt",
             )
 
-            inputs = inputs.to("cuda" if torch.cuda.is_available() else "cpu")
+            # Move inputs to appropriate device
+            inputs = inputs.to(self.device)
             logger.debug("Model inputs prepared and moved to device.")
 
+            # Generate output
             generated_ids = self.model.generate(**inputs, max_new_tokens=128)
+
+            # Trim the output ids exactly as in the example
             generated_ids_trimmed = [
                 out_ids[len(in_ids):] 
                 for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
             ]
 
+            # Decode the output
             output_text = self.processor.batch_decode(
                 generated_ids_trimmed,
                 skip_special_tokens=False,
