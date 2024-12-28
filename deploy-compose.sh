@@ -1,16 +1,13 @@
 #!/bin/bash
 
-# Create the network if it doesn't exist
+# Connect to the existing Caddy network
 docker network create caddy_network || true
 
-# Stop and remove existing containers
+# Stop existing containers
 docker-compose down
 
-# Pull latest images
-docker-compose pull
-
-# Build and start services
-docker-compose up -d
+# Build and start the FastAPI service
+docker-compose up -d --build fastapi
 
 # Check logs
-docker-compose logs -f
+docker-compose logs -f fastapi

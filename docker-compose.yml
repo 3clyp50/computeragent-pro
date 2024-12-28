@@ -19,26 +19,6 @@ services:
     networks:
       - caddy_network
 
-  caddy:
-    image: caddy:latest
-    container_name: caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-    networks:
-      - caddy_network
-    depends_on:
-      - fastapi
-
 networks:
   caddy_network:
     external: true
-
-volumes:
-  caddy_data:
-  caddy_config:
