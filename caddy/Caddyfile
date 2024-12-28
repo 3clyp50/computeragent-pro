@@ -3,8 +3,10 @@ computeragent.pro, www.computeragent.pro {
 
     log {
         output file /var/log/caddy/access.log
-        format single_field common_log
+        format json
     }
 
-    tls your-email@example.com
+    tls {
+        protocols tls1.2 tls1.3
+    }
 }

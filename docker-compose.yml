@@ -3,12 +3,21 @@ version: '3.8'
 services:
   fastapi:
     build: .
-    container_name: fastapi
+    container_name: computeragent-pro
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     env_file:
       - .env
     expose:
       - "8000"
+    networks:
+      - caddy_network
 
   caddy:
     image: caddy:latest
@@ -21,8 +30,14 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - caddy_network
     depends_on:
       - fastapi
+
+networks:
+  caddy_network:
+    external: true
 
 volumes:
   caddy_data:
