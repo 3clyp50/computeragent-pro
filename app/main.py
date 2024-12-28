@@ -1,8 +1,9 @@
 import logging
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.throttling import ThrottlingMiddleware
 from starlette.requests import Request
 from .config import settings
 from .model import ModelInference
@@ -59,6 +60,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(
+    ThrottlingMiddleware, 
+    rate_limit=100,  # requests
+    time_window=60   # seconds
+)
+
 # Initialize model inference
 model_inference = ModelInference()
 
@@ -103,9 +110,13 @@ async def predict(file: UploadFile = File(...), prompt: str = "Describe this ima
 
 # Custom Exception Handler (optional, for more detailed error handling)
 @app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}")
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global error: {exc}")
     return JSONResponse(
         status_code=500,
-        content={"status": "error", "message": "Internal Server Error"}
+        content={
+            "status": "error",
+            "message": "Internal server error",
+            "detail": str(exc) if settings.ENVIRONMENT == "development" else None
+        }
     )

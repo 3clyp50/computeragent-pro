@@ -28,6 +28,15 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Failed to load processor: {e}")
             raise e
+                
+    def warmup(self):
+        """Perform model warmup inference"""
+        try:
+            dummy_image = Image.new('RGB', (224, 224))
+            self.infer(dummy_image, "test prompt")
+            logger.info("Model warmup completed successfully")
+        except Exception as e:
+            logger.error(f"Model warmup failed: {e}")
 
     def infer(self, image: Image.Image, prompt: str) -> str:
         try:
