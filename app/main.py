@@ -3,7 +3,6 @@ from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, R
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.throttling import ThrottlingMiddleware
 from starlette.requests import Request
 from .config import settings
 from .model import ModelInference
@@ -58,12 +57,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-)
-
-app.add_middleware(
-    ThrottlingMiddleware, 
-    rate_limit=100,  # requests
-    time_window=60   # seconds
 )
 
 # Initialize model inference
