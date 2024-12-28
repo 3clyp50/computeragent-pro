@@ -20,15 +20,12 @@ logging.basicConfig(
 )
 
 # API Key Security for production 
-
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-def get_api_key(api_key_header: str = Depends(api_key_header)):
+async def get_api_key(api_key_header: str = Depends(api_key_header)):
     if settings.ENVIRONMENT == "production":
         if not settings.AI_AGENT_KEY:
             logger.error("AI_AGENT_KEY is not set in production environment.")
-            # AI_AGENT_KEY is set in the .env file
-            # It will be used internally by us for security purposes
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Server configuration error."
@@ -45,7 +42,7 @@ def get_api_key(api_key_header: str = Depends(api_key_header)):
 # Initialize FastAPI app
 app = FastAPI(title="OS-Atlas Vision API")
 
-# Configure CORS (dev environment)
+# Configure CORS
 if settings.ENVIRONMENT == "development":
     origins = ["*"]  # Allow all for local development
 else:
@@ -66,18 +63,12 @@ model_inference = ModelInference()
 async def health_check():
     return {"status": "ok", "environment": settings.ENVIRONMENT}
 
-from functools import wraps
-
-def require_api_key(func):
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        api_key = await get_api_key()
-        return await func(*args, **kwargs)
-    return wrapper
-
-@app.post("/predict", response_model=InferenceResponse, dependencies=[Depends(get_api_key)])
-@require_api_key
-async def predict(file: UploadFile = File(...), prompt: str = "Describe this image"):
+@app.post("/predict", response_model=InferenceResponse)
+async def predict(
+    file: UploadFile = File(...), 
+    prompt: str = "Describe this image",
+    api_key: str = Depends(get_api_key)
+):
     try:
         logger.info("Received a prediction request.")
 
@@ -98,10 +89,10 @@ async def predict(file: UploadFile = File(...), prompt: str = "Describe this ima
         logger.error(f"Error during prediction: {e}")
         return JSONResponse(
             status_code=500,
-            content={"status": "error", "message": "Internal Server Error"}
+            content={"status": "error", "message": str(e)}
         )
 
-# Custom Exception Handler (optional, for more detailed error handling)
+# Custom Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global error: {exc}")
