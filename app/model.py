@@ -44,55 +44,71 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> str:
         try:
-            # Format messages as in the example
+            # Create a temporary file path for the image
             messages = [
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "image",
-                            "image": image,
+                            "image": image  # Pass PIL Image directly
                         },
-                        {"type": "text", "text": prompt},
-                    ],
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
                 }
             ]
 
-            # Prepare inputs exactly as in the example
+            # Process text input
             text = self.processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
+            logger.debug("Chat template applied")
 
+            # Process image input
             image_inputs, video_inputs = process_vision_info(messages)
+            if not image_inputs:
+                raise ValueError("No image inputs processed")
+            logger.debug(f"Processed vision info: {len(image_inputs)} images")
 
+            # Prepare model inputs
             inputs = self.processor(
                 text=[text],
                 images=image_inputs,
                 videos=video_inputs,
                 padding=True,
-                return_tensors="pt",
+                return_tensors="pt"
             )
-
-            # Move inputs to appropriate device
             inputs = inputs.to(self.device)
-            logger.debug("Model inputs prepared and moved to device.")
+            logger.debug("Inputs prepared and moved to device")
 
             # Generate output
-            generated_ids = self.model.generate(**inputs, max_new_tokens=128)
+            with torch.no_grad():
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=128,
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                    eos_token_id=self.processor.tokenizer.eos_token_id
+                )
+            logger.debug("Generation completed")
 
-            # Trim the output ids exactly as in the example
+            # Process output
             generated_ids_trimmed = [
                 out_ids[len(in_ids):] 
                 for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
             ]
 
-            # Decode the output
             output_text = self.processor.batch_decode(
                 generated_ids_trimmed,
                 skip_special_tokens=False,
                 clean_up_tokenization_spaces=False
             )
-            logger.debug("Inference generation completed.")
+            logger.debug("Output decoded")
+
+            if not output_text:
+                raise ValueError("No output generated")
 
             return output_text[0]
         except Exception as e:
