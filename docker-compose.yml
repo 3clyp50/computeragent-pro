@@ -14,11 +14,5 @@ services:
               capabilities: [gpu]
     env_file:
       - .env
-    expose:
-      - "8000"
-    networks:
-      - caddy_network
-
-networks:
-  caddy_network:
-    external: true
+    ports:
+      - "8000:8000"
