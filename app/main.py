@@ -74,17 +74,34 @@ async def predict(
 
         # Read and validate the image
         image_data = await file.read()
-        image = Image.open(io.BytesIO(image_data))
-        logger.debug(f"Image opened: {file.filename}")
+        try:
+            image = Image.open(io.BytesIO(image_data))
+            # Convert to RGB if needed
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            logger.debug(f"Image opened and processed: {file.filename}")
+        except Exception as img_error:
+            logger.error(f"Image processing error: {img_error}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid image format: {str(img_error)}"
+            )
 
-        # Run inference
-        result = model_inference.infer(image, prompt)
-        logger.info("Inference completed successfully.")
+        try:
+            # Run inference
+            result = model_inference.infer(image, prompt)
+            logger.info("Inference completed successfully.")
 
-        return InferenceResponse(
-            status="success",
-            prediction=result
-        )
+            return InferenceResponse(
+                status="success",
+                prediction=result
+            )
+        except Exception as inf_error:
+            logger.error(f"Inference error: {inf_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Inference failed: {str(inf_error)}"
+            )
     except Exception as e:
         logger.error(f"Error during prediction: {e}")
         return JSONResponse(
