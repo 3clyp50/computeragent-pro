@@ -78,21 +78,34 @@ class ModelInference:
                 if not image_inputs:
                     raise ValueError("No image inputs processed")
                 logger.debug(f"Processed vision info: {len(image_inputs)} images")
+                
+                # Log image details for debugging
+                for idx, img in enumerate(image_inputs):
+                    logger.debug(f"Image {idx} - Size: {img.size}, Mode: {img.mode}")
             except Exception as e:
                 logger.error(f"Error processing vision info: {e}")
                 raise
 
-            # Prepare model inputs
+            # Prepare model inputs - modified to match working example exactly
             try:
+                logger.debug("Preparing inputs with processor...")
+                
+                # Ensure image is in expected format
+                if len(image_inputs) == 0:
+                    raise ValueError("No valid images to process")
+                    
+                # Create inputs exactly as in working example
                 inputs = self.processor(
-                    text=[text],
-                    images=image_inputs,
-                    videos=video_inputs,
-                    padding=True,
+                    text=text,  # Changed from [text] to text
+                    images=image_inputs[0],  # Pass single image directly
                     return_tensors="pt"
                 )
+                
+                logger.debug(f"Input keys: {inputs.keys()}")
+                logger.debug(f"Input shapes - ids: {inputs.input_ids.shape}, attention: {inputs.attention_mask.shape}")
+                
                 inputs = inputs.to(self.device)
-                logger.debug(f"Inputs prepared and moved to device. Shape: {inputs.input_ids.shape}")
+                logger.debug(f"Inputs moved to device {self.device}")
             except Exception as e:
                 logger.error(f"Error preparing inputs: {e}")
                 raise
