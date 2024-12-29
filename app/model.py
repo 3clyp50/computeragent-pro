@@ -1,7 +1,7 @@
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from PIL import Image
 import torch
-from .utils import process_vision_info
+from qwen_vl_utils import process_vision_info
 from .config import settings
 import logging
 
@@ -41,6 +41,27 @@ class ModelInference:
             logger.info("Model warmup completed successfully")
         except Exception as e:
             logger.error(f"Model warmup failed: {e}")
+
+    def extract_coordinates(self, text: str) -> str:
+        """Extract coordinates from model output text using regex"""
+        try:
+            import re
+            # Extract box coordinates using regex pattern
+            box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
+            box_match = re.search(box_pattern, text)
+            
+            if box_match:
+                box_content = box_match.group(1)
+                # Convert coordinates to list format
+                boxes = [tuple(map(int, pair.strip("()").split(','))) 
+                        for pair in box_content.split("),(")]
+                # Format as [[x1, y1, x2, y2]]
+                coords = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
+                return str(coords)
+            return text
+        except Exception as e:
+            logger.error(f"Error extracting coordinates: {e}")
+            return text
 
     def infer(self, image: Image.Image, prompt: str) -> str:
         try:
@@ -96,8 +117,10 @@ class ModelInference:
                     
                 # Create inputs exactly as in working example
                 inputs = self.processor(
-                    text=text,  # Changed from [text] to text
-                    images=image_inputs[0],  # Pass single image directly
+                    text=[text],
+                    images=image_inputs,
+                    videos=video_inputs,
+                    padding=True,
                     return_tensors="pt"
                 )
                 
@@ -138,7 +161,9 @@ class ModelInference:
                 if not output_text:
                     raise ValueError("No output generated")
                 
-                return output_text[0]
+                # Extract coordinates from the output
+                result = output_text[0]
+                return self.extract_coordinates(result)
                 
             except Exception as e:
                 logger.error(f"Error processing output: {e}")

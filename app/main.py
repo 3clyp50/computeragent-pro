@@ -7,7 +7,6 @@ from starlette.requests import Request
 from .config import settings
 from .model import ModelInference
 from .schemas import InferenceResponse
-from .utils import process_vision_info
 import base64
 from PIL import Image
 import io
