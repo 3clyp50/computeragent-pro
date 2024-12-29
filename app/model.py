@@ -44,117 +44,93 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> str:
         try:
-            # Save image to temporary file to match working implementation
-            import tempfile
-            import os
-            
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-                # Save image in JPEG format
-                if image.mode != 'RGB':
-                    image = image.convert('RGB')
-                image.save(temp_file.name, 'JPEG')
-                logger.debug(f"Saved image to temporary file: {temp_file.name}")
-                
-                try:
-                    # Format messages as in working implementation
-                    messages = [
+            # Format messages directly with PIL Image
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
                         {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image",
-                                    "image": temp_file.name,  # Use file path instead of PIL Image
-                                },
-                                {
-                                    "type": "text",
-                                    "text": prompt
-                                }
-                            ]
+                            "type": "image",
+                            "image": image,  # Pass PIL Image directly
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
                         }
                     ]
-                    logger.debug("Messages formatted")
+                }
+            ]
+            logger.debug("Messages formatted")
 
-                    # Process text input
-                    try:
-                        text = self.processor.apply_chat_template(
-                            messages, tokenize=False, add_generation_prompt=True
-                        )
-                        logger.debug(f"Chat template applied: {text[:100]}...")  # Log first 100 chars
-                    except Exception as e:
-                        logger.error(f"Error applying chat template: {e}")
-                        raise
+            # Process text input
+            try:
+                text = self.processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                logger.debug(f"Chat template applied: {text[:100]}...")
+            except Exception as e:
+                logger.error(f"Error applying chat template: {e}")
+                raise
 
-                    # Process image input
-                    try:
-                        image_inputs, video_inputs = process_vision_info(messages)
-                        if not image_inputs:
-                            raise ValueError("No image inputs processed")
-                        logger.debug(f"Processed vision info: {len(image_inputs)} images")
-                    except Exception as e:
-                        logger.error(f"Error processing vision info: {e}")
-                        raise
+            # Process image input
+            try:
+                image_inputs, video_inputs = process_vision_info(messages)
+                if not image_inputs:
+                    raise ValueError("No image inputs processed")
+                logger.debug(f"Processed vision info: {len(image_inputs)} images")
+            except Exception as e:
+                logger.error(f"Error processing vision info: {e}")
+                raise
 
-                    # Prepare model inputs
-                    try:
-                        inputs = self.processor(
-                            text=[text],
-                            images=image_inputs,
-                            videos=video_inputs,
-                            padding=True,
-                            return_tensors="pt"
-                        )
-                        inputs = inputs.to(self.device)
-                        logger.debug(f"Inputs prepared and moved to device. Shape: {inputs.input_ids.shape}")
-                    except Exception as e:
-                        logger.error(f"Error preparing inputs: {e}")
-                        raise
+            # Prepare model inputs
+            try:
+                inputs = self.processor(
+                    text=[text],
+                    images=image_inputs,
+                    videos=video_inputs,
+                    padding=True,
+                    return_tensors="pt"
+                )
+                inputs = inputs.to(self.device)
+                logger.debug(f"Inputs prepared and moved to device. Shape: {inputs.input_ids.shape}")
+            except Exception as e:
+                logger.error(f"Error preparing inputs: {e}")
+                raise
 
-                    # Generate output
-                    try:
-                        with torch.no_grad():
-                            generated_ids = self.model.generate(
-                                **inputs,
-                                max_new_tokens=128,
-                                pad_token_id=self.processor.tokenizer.pad_token_id,
-                                eos_token_id=self.processor.tokenizer.eos_token_id
-                            )
-                        logger.debug(f"Generation completed. Shape: {generated_ids.shape}")
-                    except Exception as e:
-                        logger.error(f"Error during generation: {e}")
-                        raise
+            # Generate output
+            try:
+                with torch.no_grad():
+                    generated_ids = self.model.generate(
+                        **inputs,
+                        max_new_tokens=128
+                    )
+                logger.debug(f"Generation completed. Shape: {generated_ids.shape}")
+            except Exception as e:
+                logger.error(f"Error during generation: {e}")
+                raise
 
-                    # Process output
-                    try:
-                        if len(inputs.input_ids) == 0 or len(generated_ids) == 0:
-                            raise ValueError("Empty input or generated IDs")
-                            
-                        generated_ids_trimmed = [
-                            out_ids[len(in_ids):] 
-                            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-                        ]
-                        logger.debug(f"Trimmed IDs. Length: {len(generated_ids_trimmed)}")
+            # Process output exactly as in working example
+            try:
+                generated_ids_trimmed = [
+                    out_ids[len(in_ids):] 
+                    for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+                ]
+                
+                output_text = self.processor.batch_decode(
+                    generated_ids_trimmed,
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False
+                )
+                
+                if not output_text:
+                    raise ValueError("No output generated")
+                
+                return output_text[0]
+                
+            except Exception as e:
+                logger.error(f"Error processing output: {e}")
+                raise
 
-                        output_text = self.processor.batch_decode(
-                            generated_ids_trimmed,
-                            skip_special_tokens=False,
-                            clean_up_tokenization_spaces=False
-                        )
-                        logger.debug(f"Output decoded. Length: {len(output_text)}")
-
-                        if not output_text:
-                            raise ValueError("No output generated")
-
-                        return output_text[0]
-                    except Exception as e:
-                        logger.error(f"Error processing output: {e}")
-                        raise
-                finally:
-                    # Clean up temporary file
-                    try:
-                        os.unlink(temp_file.name)
-                        logger.debug("Temporary file cleaned up")
-                    except Exception as e:
-                        logger.warning(f"Error cleaning up temporary file: {e}")
         except Exception as e:
             logger.error(f"Inference error: {e}")
             raise e

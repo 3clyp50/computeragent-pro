@@ -141,15 +141,31 @@ async def predict(
                     status_code=503,
                     detail="Server is currently overloaded. Please try again later."
                 )
+            elif "No valid tokens to decode" in error_msg:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Model generated invalid output. Please try again with a different prompt."
+                )
+            elif "Empty output after cleanup" in error_msg:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Model generated empty response. Please try again with a different prompt."
+                )
+            elif "No image inputs processed" in error_msg:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Failed to process image input. Please ensure the image is valid."
+                )
             elif "list index out of range" in error_msg:
                 raise HTTPException(
                     status_code=500,
-                    detail="Error processing model output. Please try again."
+                    detail="Error processing model output. This is likely due to an unexpected model response format."
                 )
             else:
+                logger.error(f"Unhandled inference error: {error_msg}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Inference failed: {error_msg}"
+                    detail="An unexpected error occurred during inference."
                 )
                 
     except HTTPException:
