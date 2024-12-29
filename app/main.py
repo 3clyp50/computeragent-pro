@@ -70,43 +70,100 @@ async def predict(
     api_key: str = Depends(get_api_key)
 ):
     try:
-        logger.info("Received a prediction request.")
+        logger.info(f"Received a prediction request for file: {file.filename}")
+        
+        # Validate file size
+        try:
+            image_data = await file.read()
+            if len(image_data) > 10 * 1024 * 1024:  # 10MB limit
+                raise HTTPException(
+                    status_code=400,
+                    detail="File size too large. Maximum size is 10MB."
+                )
+        except Exception as read_error:
+            logger.error(f"Error reading file: {read_error}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error reading file: {str(read_error)}"
+            )
 
-        # Read and validate the image
-        image_data = await file.read()
+        # Validate and process image
         try:
             image = Image.open(io.BytesIO(image_data))
+            logger.debug(f"Image format: {image.format}, Mode: {image.mode}, Size: {image.size}")
+            
             # Convert to RGB if needed
             if image.mode != 'RGB':
                 image = image.convert('RGB')
-            logger.debug(f"Image opened and processed: {file.filename}")
+                logger.debug(f"Converted image to RGB mode")
+            
+            # Validate image dimensions
+            if image.size[0] > 2048 or image.size[1] > 2048:
+                logger.warning(f"Large image detected: {image.size}")
+                image.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+                logger.debug(f"Resized image to: {image.size}")
+                
         except Exception as img_error:
             logger.error(f"Image processing error: {img_error}")
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid image format: {str(img_error)}"
+                detail=f"Invalid image format or corrupted file: {str(img_error)}"
             )
 
-        try:
-            # Run inference
-            result = model_inference.infer(image, prompt)
-            logger.info("Inference completed successfully.")
+        # Validate prompt
+        if not prompt or len(prompt.strip()) == 0:
+            prompt = "Describe this image"
+            logger.warning("Empty prompt received, using default")
+        elif len(prompt) > 500:
+            logger.warning("Prompt too long, truncating")
+            prompt = prompt[:500]
 
+        # Run inference
+        try:
+            logger.info("Starting inference")
+            result = model_inference.infer(image, prompt)
+            
+            if not result or len(result.strip()) == 0:
+                raise ValueError("Model returned empty result")
+                
+            logger.info("Inference completed successfully")
             return InferenceResponse(
                 status="success",
                 prediction=result
             )
+            
         except Exception as inf_error:
-            logger.error(f"Inference error: {inf_error}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Inference failed: {str(inf_error)}"
-            )
+            error_msg = str(inf_error)
+            logger.error(f"Inference error: {error_msg}")
+            
+            if "CUDA out of memory" in error_msg:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Server is currently overloaded. Please try again later."
+                )
+            elif "list index out of range" in error_msg:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Error processing model output. Please try again."
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Inference failed: {error_msg}"
+                )
+                
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error during prediction: {e}")
+        error_msg = str(e)
+        logger.error(f"Unexpected error during prediction: {error_msg}")
         return JSONResponse(
             status_code=500,
-            content={"status": "error", "message": str(e)}
+            content={
+                "status": "error",
+                "message": "Internal server error",
+                "detail": error_msg if settings.ENVIRONMENT == "development" else None
+            }
         )
 
 # Custom Exception Handler
