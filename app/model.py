@@ -27,18 +27,33 @@ def draw_bounding_boxes(image, bounding_boxes, outline_color="red", line_width=2
     return image
 
 def rescale_bounding_boxes(bounding_boxes, original_width, original_height, scaled_width=1000, scaled_height=1000):
+    """Rescale bounding boxes from model coordinates to image dimensions"""
+    # Calculate scaling factors
     x_scale = original_width / scaled_width
     y_scale = original_height / scaled_height
+    
     rescaled_boxes = []
     for box in bounding_boxes:
+        if len(box) != 4:
+            continue
+            
         xmin, ymin, xmax, ymax = box
+        
+        # Ensure coordinates are within bounds
+        xmin = max(0, min(scaled_width, xmin))
+        ymin = max(0, min(scaled_height, ymin))
+        xmax = max(0, min(scaled_width, xmax))
+        ymax = max(0, min(scaled_height, ymax))
+        
+        # Apply scaling
         rescaled_box = [
-            xmin * x_scale,
-            ymin * y_scale,
-            xmax * x_scale,
-            ymax * y_scale
+            round(xmin * x_scale, 2),
+            round(ymin * y_scale, 2),
+            round(xmax * x_scale, 2),
+            round(ymax * y_scale, 2)
         ]
         rescaled_boxes.append(rescaled_box)
+    
     return rescaled_boxes
 
 class ModelInference:
@@ -99,8 +114,8 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
         try:
-            # Format messages exactly like HuggingFace Space
-            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
+            # Format messages to request precise button coordinates with emphasis on tight boundaries
+            prompt = f"Find the exact pixel coordinates of the button labeled \"{prompt}\" in this UI screenshot. Return a tight bounding box that includes ONLY the button element itself, excluding any surrounding margins or content. The coordinates should be as precise as possible."
             messages = [
                 {
                     "role": "user",
@@ -170,19 +185,30 @@ class ModelInference:
                     logger.warning("No box coordinates found in model output")
                     return text, []
 
-                # Parse coordinates
-                boxes = [tuple(map(int, pair.strip("()").split(','))) 
-                        for pair in box_content.group(1).split("),(")]
-                boxes = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
-                
-                # Scale boxes to image dimensions
-                scaled_boxes = rescale_bounding_boxes(boxes, image.width, image.height)
-                
-                # Draw boxes internally to help model determine coordinates
-                draw_bounding_boxes(image.copy(), scaled_boxes)
-                
-                # Return only the scaled coordinates
-                return scaled_boxes[0] if scaled_boxes else []
+                # Parse coordinates - expect format [x1,y1,x2,y2]
+                try:
+                    # Clean up the box content and parse as a list of floats
+                    coords_str = box_content.group(1).strip('[]')
+                    coords = [float(x.strip()) for x in coords_str.split(',')]
+                    
+                    if len(coords) != 4:
+                        logger.warning(f"Invalid coordinate format: {coords}")
+                        return []
+                    
+                    # Create box in [x1,y1,x2,y2] format
+                    box = [[coords[0], coords[1], coords[2], coords[3]]]
+                    
+                    # Scale boxes to image dimensions
+                    scaled_boxes = rescale_bounding_boxes(box, image.width, image.height)
+                    
+                    # Draw boxes internally to help model determine coordinates
+                    draw_bounding_boxes(image.copy(), scaled_boxes)
+                    
+                    # Return only the scaled coordinates
+                    return scaled_boxes[0] if scaled_boxes else []
+                except ValueError as e:
+                    logger.error(f"Error parsing coordinates: {e}")
+                    return []
                 
             except Exception as e:
                 logger.error(f"Error processing output: {e}")
