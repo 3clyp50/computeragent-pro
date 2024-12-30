@@ -166,6 +166,7 @@ class ModelInference:
                 
                 # Process output and extract coordinates exactly like HuggingFace Space
                 text = output_text[0]
+                logger.info(f"Raw model output: {text}")
                 
                 # Extract coordinates using regex patterns
                 import re
@@ -182,11 +183,27 @@ class ModelInference:
                     logger.warning("No box coordinates found in model output")
                     return text, []
 
-                # Parse coordinates - expect format [x1,y1,x2,y2]
+                # Parse coordinates - expect format [x1,y1,x2,y2] or (x1,y1),(x2,y2)
                 try:
-                    # Clean up the box content and parse as a list of floats
-                    coords_str = box_content.group(1).strip('[]')
-                    coords = [float(x.strip()) for x in coords_str.split(',')]
+                    # Log raw coordinate string for debugging
+                    raw_coords = box_content.group(1)
+                    logger.info(f"Raw coordinates from model: {raw_coords}")
+                    
+                    # Handle both coordinate formats
+                    if '(' in raw_coords:
+                        # Format: (x1,y1),(x2,y2)
+                        points = raw_coords.strip('()').split('),(')
+                        if len(points) != 2:
+                            logger.warning(f"Invalid point format: {points}")
+                            return []
+                        
+                        point1 = [float(x.strip()) for x in points[0].split(',')]
+                        point2 = [float(x.strip()) for x in points[1].split(',')]
+                        coords = point1 + point2
+                    else:
+                        # Format: [x1,y1,x2,y2]
+                        coords_str = raw_coords.strip('[]')
+                        coords = [float(x.strip()) for x in coords_str.split(',')]
                     
                     if len(coords) != 4:
                         logger.warning(f"Invalid coordinate format: {coords}")
