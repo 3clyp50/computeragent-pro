@@ -44,10 +44,6 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> str:
         try:
-            # Format prompt to focus on coordinates
-            if "coordinates" not in prompt.lower() and "position" not in prompt.lower():
-                prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
-
             messages = [
                 {
                     "role": "user",
