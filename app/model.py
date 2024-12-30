@@ -114,8 +114,8 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
         try:
-            # Format messages to request precise button coordinates with emphasis on tight boundaries
-            prompt = f"Find the exact pixel coordinates of the button labeled \"{prompt}\" in this UI screenshot. Return a tight bounding box that includes ONLY the button element itself, excluding any surrounding margins or content. The coordinates should be as precise as possible."
+            # Format messages
+            prompt = f"Find the exact pixel coordinates of \"{prompt}\" in this screenshot."
             messages = [
                 {
                     "role": "user",
@@ -125,14 +125,12 @@ class ModelInference:
                     ],
                 }
             ]
-            logger.debug("Messages formatted")
 
             # Process text input
             try:
                 text = self.processor.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=True
                 )
-                logger.debug(f"Chat template applied: {text[:100]}...")
             except Exception as e:
                 logger.error(f"Error applying chat template: {e}")
                 raise
@@ -168,7 +166,6 @@ class ModelInference:
                 
                 # Process output and extract coordinates exactly like HuggingFace Space
                 text = output_text[0]
-                logger.debug(f"Raw model output: {text}")
                 
                 # Extract coordinates using regex patterns
                 import re
