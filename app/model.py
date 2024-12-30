@@ -43,11 +43,14 @@ class ModelInference:
             logger.error(f"Model warmup failed: {e}")
 
     def extract_coordinates(self, text: str) -> str:
-        """Extract coordinates from model output text using regex"""
+        """Extract coordinates and object reference from model output text using regex"""
         try:
             import re
-            # Extract box coordinates using regex pattern
+            # Extract object reference and box coordinates using regex patterns
+            object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
             box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
+            
+            object_ref_match = re.search(object_ref_pattern, text)
             box_match = re.search(box_pattern, text)
             
             if box_match:
@@ -57,8 +60,17 @@ class ModelInference:
                         for pair in box_content.split("),(")]
                 # Format as [[x1, y1, x2, y2]]
                 coords = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
+                
+                # Include object reference if found
+                if object_ref_match:
+                    object_ref = object_ref_match.group(1)
+                    return f"{object_ref}: {coords}"
                 return str(coords)
+            
+            # If no coordinates found, return original text
+            logger.warning(f"No coordinates found in text: {text}")
             return text
+            
         except Exception as e:
             logger.error(f"Error extracting coordinates: {e}")
             return text
