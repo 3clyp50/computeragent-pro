@@ -1,12 +1,15 @@
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-from PIL import Image, ImageDraw
-import torch
-from qwen_vl_utils import process_vision_info
-from .config import settings
-import logging
 import base64
 from io import BytesIO
+import logging
 import os
+import re
+
+from PIL import Image
+import torch
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
+
+from .config import settings
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -19,19 +22,8 @@ def image_to_base64(image):
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return img_str
 
-def draw_bounding_boxes(image, bounding_boxes, outline_color="red", line_width=2):
-    draw = ImageDraw.Draw(image)
-    for box in bounding_boxes:
-        xmin, ymin, xmax, ymax = box
-        draw.rectangle([xmin, ymin, xmax, ymax], outline=outline_color, width=line_width)
-    return image
-
-def rescale_bounding_boxes(bounding_boxes, original_width, original_height, scaled_width=1000, scaled_height=1000):
-    """Rescale bounding boxes from model coordinates to image dimensions"""
-    # Calculate scaling factors
-    x_scale = original_width / scaled_width
-    y_scale = original_height / scaled_height
-    
+def rescale_bounding_boxes(bounding_boxes, original_width, original_height):
+    """Rescale bounding boxes to image dimensions, handling both normalized and pixel coordinates"""
     rescaled_boxes = []
     for box in bounding_boxes:
         if len(box) != 4:
@@ -39,18 +31,35 @@ def rescale_bounding_boxes(bounding_boxes, original_width, original_height, scal
             
         xmin, ymin, xmax, ymax = box
         
-        # Ensure coordinates are within bounds
-        xmin = max(0, min(scaled_width, xmin))
-        ymin = max(0, min(scaled_height, ymin))
-        xmax = max(0, min(scaled_width, xmax))
-        ymax = max(0, min(scaled_height, ymax))
+        # Detect if coordinates are normalized (between 0-1) or raw pixels
+        is_normalized = all(0 <= coord <= 1 for coord in [xmin, ymin, xmax, ymax])
         
-        # Apply scaling
+        # Convert to normalized coordinates if needed
+        if not is_normalized:
+            # Assume coordinates are relative to 1000x1000 space like in example
+            xmin, ymin = xmin/1000, ymin/1000
+            xmax, ymax = xmax/1000, ymax/1000
+        
+        # Apply size reduction for tighter bounding box
+        adjustment = 0.15  # Reduce box size by 85%
+        
+        # Calculate center and dimensions in normalized space
+        center_x = (xmin + xmax) / 2
+        center_y = (ymin + ymax) / 2
+        width = (xmax - xmin) * adjustment
+        height = (ymax - ymin) * adjustment
+        
+        # Map to image dimensions
+        new_xmin = max(0, round((center_x - width/2) * original_width))
+        new_ymin = max(0, round((center_y - height/2) * original_height))
+        new_xmax = min(original_width, round((center_x + width/2) * original_width))
+        new_ymax = min(original_height, round((center_y + height/2) * original_height))
+        
         rescaled_box = [
-            round(xmin * x_scale, 2),
-            round(ymin * y_scale, 2),
-            round(xmax * x_scale, 2),
-            round(ymax * y_scale, 2)
+            round(new_xmin, 2),
+            round(new_ymin, 2),
+            round(new_xmax, 2),
+            round(new_ymax, 2)
         ]
         rescaled_boxes.append(rescaled_box)
     
@@ -112,7 +121,7 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Model warmup failed: {e}")
 
-    def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
+    def infer(self, image: Image.Image, prompt: str) -> list:
         try:
             # Format messages to request precise button coordinates with emphasis on tight boundaries
             prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
@@ -171,40 +180,43 @@ class ModelInference:
                 logger.debug(f"Raw model output: {text}")
                 
                 # Extract coordinates using regex patterns
-                import re
                 object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
                 box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
 
                 object_ref = re.search(object_ref_pattern, text)
                 if not object_ref:
                     logger.warning("No object reference found in model output")
-                    return text, []
+                    return []
                     
                 box_content = re.search(box_pattern, text)
                 if not box_content:
                     logger.warning("No box coordinates found in model output")
-                    return text, []
+                    return []
 
-                # Parse coordinates - expect format (x1,y1),(x2,y2)
+                # Parse coordinates - handle both array format [x1,y1,x2,y2] and paired format (x1,y1),(x2,y2)
                 try:
-                    # Parse pairs of coordinates like in the working example
-                    box_str = box_content.group(1)
-                    boxes = [tuple(map(int, pair.strip("()").split(','))) for pair in box_str.split("),(")]
+                    box_str = box_content.group(1).strip()
                     
-                    if len(boxes) != 2:
-                        logger.warning(f"Invalid coordinate format: {box_str}")
-                        return []
-                    
-                    # Convert to [xmin,ymin,xmax,ymax] format
-                    box = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
+                    # Try array format first [x1,y1,x2,y2]
+                    if box_str.startswith('[') and box_str.endswith(']'):
+                        coords = [float(x.strip()) for x in box_str.strip('[]').split(',')]
+                        if len(coords) != 4:
+                            logger.warning(f"Invalid array coordinate format: {box_str}")
+                            return []
+                        box = [coords]  # Keep as list of boxes for consistency
+                        
+                    # Fall back to paired format (x1,y1),(x2,y2)
+                    else:
+                        boxes = [tuple(map(int, pair.strip("()").split(','))) for pair in box_str.split("),(")]
+                        if len(boxes) != 2:
+                            logger.warning(f"Invalid paired coordinate format: {box_str}")
+                            return []
+                        box = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
                     
                     # Scale boxes to image dimensions
                     scaled_boxes = rescale_bounding_boxes(box, image.width, image.height)
                     
-                    # Draw boxes internally to help model determine coordinates
-                    draw_bounding_boxes(image.copy(), scaled_boxes)
-                    
-                    # Return only the scaled coordinates
+                    # Return the scaled coordinates
                     return scaled_boxes[0] if scaled_boxes else []
                 except ValueError as e:
                     logger.error(f"Error parsing coordinates: {e}")
