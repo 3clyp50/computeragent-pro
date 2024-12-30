@@ -114,8 +114,8 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
         try:
-            # Format messages to request precise element coordinates
-            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
+            # Format messages
+            prompt = f"Find the exact pixel coordinates of \"{prompt}\" in this screenshot."
             messages = [
                 {
                     "role": "user",
