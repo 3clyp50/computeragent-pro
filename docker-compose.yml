@@ -14,5 +14,7 @@ services:
               capabilities: [gpu]
     env_file:
       - .env
+    volumes:
+      - ./model_cache:/app/model_cache  # Mount model cache directory
     ports:
       - "0.0.0.0:8000:8000"

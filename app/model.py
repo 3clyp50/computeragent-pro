@@ -6,8 +6,12 @@ from .config import settings
 import logging
 import base64
 from io import BytesIO
+import os
 
 logger = logging.getLogger("uvicorn.error")
+
+def get_cache_dir():
+    return os.path.join(os.path.dirname(os.path.dirname(__file__)), "model_cache")
 
 def image_to_base64(image):
     buffered = BytesIO()
@@ -41,11 +45,26 @@ class ModelInference:
     def __init__(self):
         try:
             logger.info(f"Loading model: {settings.MODEL_NAME}")
-            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
-                settings.MODEL_NAME,
-                torch_dtype=getattr(torch, settings.TORCH_DTYPE.upper(), torch.float32) if settings.TORCH_DTYPE != "auto" else "auto",
-                device_map=settings.DEVICE_MAP
-            )
+            # Try to load from cache first
+            cache_dir = get_cache_dir()
+            local_model_path = os.path.join(cache_dir, settings.MODEL_NAME.split('/')[-1])
+            
+            if os.path.exists(local_model_path):
+                logger.info(f"Loading model from cache: {local_model_path}")
+                self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    local_model_path,
+                    torch_dtype=getattr(torch, settings.TORCH_DTYPE.upper(), torch.float32) if settings.TORCH_DTYPE != "auto" else "auto",
+                    device_map=settings.DEVICE_MAP,
+                    local_files_only=True
+                )
+            else:
+                logger.info(f"Cache not found, downloading model: {settings.MODEL_NAME}")
+                self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    settings.MODEL_NAME,
+                    torch_dtype=getattr(torch, settings.TORCH_DTYPE.upper(), torch.float32) if settings.TORCH_DTYPE != "auto" else "auto",
+                    device_map=settings.DEVICE_MAP,
+                    cache_dir=cache_dir
+                )
             logger.info("Model loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
@@ -53,7 +72,13 @@ class ModelInference:
 
         try:
             logger.info(f"Loading processor for model: {settings.MODEL_NAME}")
-            self.processor = AutoProcessor.from_pretrained(settings.MODEL_NAME)
+            # Try to load processor from cache
+            if os.path.exists(local_model_path):
+                logger.info("Loading processor from cache")
+                self.processor = AutoProcessor.from_pretrained(local_model_path, local_files_only=True)
+            else:
+                logger.info("Downloading processor")
+                self.processor = AutoProcessor.from_pretrained(settings.MODEL_NAME, cache_dir=cache_dir)
             logger.info("Processor loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load processor: {e}")
