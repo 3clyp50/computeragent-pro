@@ -16,7 +16,7 @@ services:
       - .env
     volumes:
       - type: bind
-        source: /home/admin_dianoia_eu/computeragent-pro/app/model_cache
+        source: /home/$USER/computeragent-pro/app/model_cache
         target: /app/model_cache
     ports:
       - "0.0.0.0:8000:8000"

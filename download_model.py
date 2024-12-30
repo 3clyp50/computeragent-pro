@@ -19,7 +19,6 @@ def download_model():
         repo_id=settings.MODEL_NAME,
         cache_dir=cache_dir,
         local_dir=os.path.join(cache_dir, settings.MODEL_NAME.split('/')[-1]),
-        local_dir_use_symlinks=False  # Actual files instead of symlinks for Docker
     )
     
     print(f"Model downloaded successfully to: {local_dir}")
