@@ -115,7 +115,7 @@ class ModelInference:
     def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
         try:
             # Format messages to request precise button coordinates with emphasis on tight boundaries
-            prompt = f"Find the exact pixel coordinates of the button labeled \"{prompt}\" in this UI screenshot. Return a tight bounding box that includes ONLY the button element itself, excluding any surrounding margins or content. The coordinates should be as precise as possible."
+            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
             messages = [
                 {
                     "role": "user",
@@ -185,18 +185,18 @@ class ModelInference:
                     logger.warning("No box coordinates found in model output")
                     return text, []
 
-                # Parse coordinates - expect format [x1,y1,x2,y2]
+                # Parse coordinates - expect format (x1,y1),(x2,y2)
                 try:
-                    # Clean up the box content and parse as a list of floats
-                    coords_str = box_content.group(1).strip('[]')
-                    coords = [float(x.strip()) for x in coords_str.split(',')]
+                    # Parse pairs of coordinates like in the working example
+                    box_str = box_content.group(1)
+                    boxes = [tuple(map(int, pair.strip("()").split(','))) for pair in box_str.split("),(")]
                     
-                    if len(coords) != 4:
-                        logger.warning(f"Invalid coordinate format: {coords}")
+                    if len(boxes) != 2:
+                        logger.warning(f"Invalid coordinate format: {box_str}")
                         return []
                     
-                    # Create box in [x1,y1,x2,y2] format
-                    box = [[coords[0], coords[1], coords[2], coords[3]]]
+                    # Convert to [xmin,ymin,xmax,ymax] format
+                    box = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
                     
                     # Scale boxes to image dimensions
                     scaled_boxes = rescale_bounding_boxes(box, image.width, image.height)
