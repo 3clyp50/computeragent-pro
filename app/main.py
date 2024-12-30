@@ -108,21 +108,21 @@ async def predict(
         # Run inference
         try:
             logger.info("Starting inference")
-            object_ref, boxes = model_inference.infer(image, prompt)
+            coordinates = model_inference.infer(image, prompt)
             
-            if not boxes:
-                logger.warning("No bounding boxes found")
+            if not coordinates:
+                logger.warning("No coordinates found")
                 return InferenceResponse(
                     status="success",
-                    prediction=object_ref  # Return raw text when no boxes found
+                    prediction="[]"  # Return empty list when no coordinates found
                 )
             
             logger.info("Inference completed successfully")
             return InferenceResponse(
                 status="success",
-                prediction=f"{object_ref}: {boxes}"
+                prediction=str(coordinates)  # Return just the coordinates
             )
-        
+            
         except Exception as inf_error:
             error_msg = str(inf_error)
             logger.error(f"Inference error: {error_msg}")

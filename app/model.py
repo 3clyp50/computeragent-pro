@@ -181,7 +181,8 @@ class ModelInference:
                 # Draw boxes internally to help model determine coordinates
                 draw_bounding_boxes(image.copy(), scaled_boxes)
                 
-                return object_ref.group(1), scaled_boxes
+                # Return only the scaled coordinates
+                return scaled_boxes[0] if scaled_boxes else []
                 
             except Exception as e:
                 logger.error(f"Error processing output: {e}")

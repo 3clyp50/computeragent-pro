@@ -15,6 +15,8 @@ services:
     env_file:
       - .env
     volumes:
-      - ./model_cache:/app/model_cache  # Mount model cache directory
+      - type: bind
+        source: /home/admin_dianoia_eu/computeragent-pro/app/model_cache
+        target: /app/model_cache
     ports:
       - "0.0.0.0:8000:8000"

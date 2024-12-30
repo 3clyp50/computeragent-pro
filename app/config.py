@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Security
     AI_AGENT_KEY: Optional[str] = Field(None, env="AI_AGENT_KEY")  # Optional: Set in production
 
+    # Model cache
+    HF_HOME: str = Field("/app/model_cache", env="HF_HOME", description="Must be absolute path in container")
+
     # Logging
     LOG_LEVEL: str = Field("INFO", env="LOG_LEVEL")
 
