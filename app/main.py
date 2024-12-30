@@ -65,7 +65,7 @@ async def health_check():
 @app.post("/predict", response_model=InferenceResponse)
 async def predict(
     file: UploadFile = File(...), 
-    prompt: str = "Describe this image",
+    prompt: str = "",
     api_key: str = Depends(get_api_key)
 ):
     try:
