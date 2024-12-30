@@ -104,21 +104,25 @@ async def predict(
         elif len(prompt) > 500:
             logger.warning("Prompt too long, truncating")
             prompt = prompt[:500]
-           
+        
         # Run inference
         try:
             logger.info("Starting inference")
-            result = model_inference.infer(image, prompt)
+            object_ref, boxes = model_inference.infer(image, prompt)
             
-            if not result or len(result.strip()) == 0:
-                raise ValueError("Model returned empty result")
-                
+            if not boxes:
+                logger.warning("No bounding boxes found")
+                return InferenceResponse(
+                    status="success",
+                    prediction=object_ref  # Return raw text when no boxes found
+                )
+            
             logger.info("Inference completed successfully")
             return InferenceResponse(
                 status="success",
-                prediction=result
+                prediction=f"{object_ref}: {boxes}"
             )
-            
+        
         except Exception as inf_error:
             error_msg = str(inf_error)
             logger.error(f"Inference error: {error_msg}")

@@ -1,11 +1,41 @@
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-from PIL import Image
+from PIL import Image, ImageDraw
 import torch
 from qwen_vl_utils import process_vision_info
 from .config import settings
 import logging
+import base64
+from io import BytesIO
 
 logger = logging.getLogger("uvicorn.error")
+
+def image_to_base64(image):
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return img_str
+
+def draw_bounding_boxes(image, bounding_boxes, outline_color="red", line_width=2):
+    draw = ImageDraw.Draw(image)
+    for box in bounding_boxes:
+        xmin, ymin, xmax, ymax = box
+        draw.rectangle([xmin, ymin, xmax, ymax], outline=outline_color, width=line_width)
+    return image
+
+def rescale_bounding_boxes(bounding_boxes, original_width, original_height, scaled_width=1000, scaled_height=1000):
+    x_scale = original_width / scaled_width
+    y_scale = original_height / scaled_height
+    rescaled_boxes = []
+    for box in bounding_boxes:
+        xmin, ymin, xmax, ymax = box
+        rescaled_box = [
+            xmin * x_scale,
+            ymin * y_scale,
+            xmax * x_scale,
+            ymax * y_scale
+        ]
+        rescaled_boxes.append(rescaled_box)
+    return rescaled_boxes
 
 class ModelInference:
     def __init__(self):
@@ -42,21 +72,17 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Model warmup failed: {e}")
 
-    def infer(self, image: Image.Image, prompt: str) -> str:
+    def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
         try:
+            # Format messages exactly like HuggingFace Space
+            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image",
-                            "image": image,
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ]
+                        {"type": "image", "image": f"data:image;base64,{image_to_base64(image)}"},
+                        {"type": "text", "text": prompt},
+                    ],
                 }
             ]
             logger.debug("Messages formatted")
@@ -100,34 +126,37 @@ class ModelInference:
                     clean_up_tokenization_spaces=False
                 )
                 
-                # Process output and extract coordinates
-                result = output_text[0]
+                # Process output and extract coordinates exactly like HuggingFace Space
+                text = output_text[0]
+                logger.debug(f"Raw model output: {text}")
                 
-                # Extract coordinates using regex patterns from HuggingFace space
+                # Extract coordinates using regex patterns
                 import re
                 object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
                 box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
-                
-                object_ref_match = re.search(object_ref_pattern, result)
-                box_match = re.search(box_pattern, result)
-                
-                if box_match:
-                    box_content = box_match.group(1)
-                    # Parse coordinates exactly like HuggingFace space
-                    boxes = [tuple(map(int, pair.strip("()").split(','))) 
-                            for pair in box_content.split("),(")]
-                    # Format as [[x1, y1, x2, y2]]
-                    coords = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
+
+                object_ref = re.search(object_ref_pattern, text)
+                if not object_ref:
+                    logger.warning("No object reference found in model output")
+                    return text, []
                     
-                    # Include object reference if found, matching HuggingFace space format
-                    if object_ref_match:
-                        object_ref = object_ref_match.group(1)
-                        return f"{object_ref}: {coords}"
-                    return str(coords)
+                box_content = re.search(box_pattern, text)
+                if not box_content:
+                    logger.warning("No box coordinates found in model output")
+                    return text, []
+
+                # Parse coordinates
+                boxes = [tuple(map(int, pair.strip("()").split(','))) 
+                        for pair in box_content.group(1).split("),(")]
+                boxes = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
                 
-                # If no coordinates found in model output
-                logger.warning("No coordinates found in model output")
-                return result
+                # Scale boxes to image dimensions
+                scaled_boxes = rescale_bounding_boxes(boxes, image.width, image.height)
+                
+                # Draw boxes internally to help model determine coordinates
+                draw_bounding_boxes(image.copy(), scaled_boxes)
+                
+                return object_ref.group(1), scaled_boxes
                 
             except Exception as e:
                 logger.error(f"Error processing output: {e}")
