@@ -47,19 +47,24 @@ def rescale_bounding_boxes(
     """
     Rescale bounding boxes from model coordinate space to actual image dimensions.
     """
-    x_scale = original_width / scaled_width
-    y_scale = original_height / scaled_height
-
     rescaled_boxes = []
     for box in bounding_boxes:
         xmin, ymin, xmax, ymax = box
-        rescaled_box = [
-            round(xmin * x_scale, 2),
-            round(ymin * y_scale, 2),
-            round(xmax * x_scale, 2),
-            round(ymax * y_scale, 2)
+        # First normalize to 0-1 range
+        norm_box = [
+            xmin / scaled_width,
+            ymin / scaled_height,
+            xmax / scaled_width,
+            ymax / scaled_height
         ]
-        rescaled_boxes.append(rescaled_box)
+        # Then scale to actual dimensions
+        scaled_box = [
+            round(norm_box[0] * original_width, 2),
+            round(norm_box[1] * original_height, 2),
+            round(norm_box[2] * original_width, 2),
+            round(norm_box[3] * original_height, 2)
+        ]
+        rescaled_boxes.append(scaled_box)
     return rescaled_boxes
 
 class ModelInference:
@@ -197,14 +202,9 @@ class ModelInference:
             raw_output = outputs[0]
             logger.debug(f"Raw model output: {raw_output}")
 
-            # Extract box coordinates using the same logic as the working implementation
+            # Extract box coordinates
             object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
             box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
-
-            object_ref = re.search(object_ref_pattern, raw_output)
-            if not object_ref:
-                logger.warning("No object reference found in model output.")
-                return raw_output, []
 
             box_content_match = re.search(box_pattern, raw_output)
             if not box_content_match:
@@ -213,48 +213,57 @@ class ModelInference:
 
             box_content = box_content_match.group(1)
 
-            # Parse coordinates similar to the working implementation
-            boxes = []
-            try:
-                # Split into coordinate pairs and parse
-                coords = [tuple(map(float, pair.strip("()").split(','))) 
-                        for pair in box_content.split("),(")]
+            # Parse the (x1,y1),(x2,y2) format from box_content
+            coords = [tuple(map(float, pair.strip("()").split(','))) 
+                    for pair in box_content.split("),(")]
 
-                if len(coords) == 2:
-                    # Convert from two points format to [xmin, ymin, xmax, ymax] format
-                    boxes = [[coords[0][0], coords[0][1], coords[1][0], coords[1][1]]]
+            if len(coords) == 2:
+                # Convert to [xmin, ymin, xmax, ymax] format
+                boxes = [[coords[0][0], coords[0][1], coords[1][0], coords[1][1]]]
 
-                # Ensure coordinates are within valid ranges (0-1000 for the model's coordinate space)
-                boxes = [[
-                    max(0, min(1000, x1)),
-                    max(0, min(1000, y1)),
-                    max(0, min(1000, x2)),
-                    max(0, min(1000, y2))
-                ] for x1, y1, x2, y2 in boxes]
+                # First, normalize coordinates to 0-1 range
+                normalized_boxes = []
+                for box in boxes:
+                    xmin, ymin, xmax, ymax = box
+                    # Normalize assuming model's internal coordinate space is 1000x1000
+                    norm_box = [
+                        xmin / 1000.0,
+                        ymin / 1000.0,
+                        xmax / 1000.0,
+                        ymax / 1000.0
+                    ]
+                    normalized_boxes.append(norm_box)
 
-            except Exception as e:
-                logger.warning(f"Error parsing coordinates: {e}")
-                # Fallback to direct number parsing if the format is different
-                try:
-                    # Handle case where model outputs direct [x1, y1, x2, y2] format
-                    numbers = re.findall(r"[-+]?\d*\.\d+|\d+", box_content)
-                    if len(numbers) >= 4:
-                        boxes = [[float(numbers[0]), float(numbers[1]), 
-                                float(numbers[2]), float(numbers[3])]]
-                except Exception as e2:
-                    logger.error(f"Fallback parsing failed: {e2}")
-                    return raw_output, []
+                # Then scale to actual image dimensions
+                scaled_boxes = []
+                for norm_box in normalized_boxes:
+                    xmin, ymin, xmax, ymax = norm_box
+                    scaled_box = [
+                        round(xmin * image.width, 2),
+                        round(ymin * image.height, 2),
+                        round(xmax * image.width, 2),
+                        round(ymax * image.height, 2)
+                    ]
+                    scaled_boxes.append(scaled_box)
 
-            # Scale the boxes to the actual image dimensions
-            scaled_boxes = rescale_bounding_boxes(
-                boxes,
-                original_width=image.width,
-                original_height=image.height,
-                scaled_width=1000,  # Model's coordinate space
-                scaled_height=1000
-            )
+                # Validate coordinates
+                for box in scaled_boxes:
+                    xmin, ymin, xmax, ymax = box
+                    if xmin >= xmax or ymin >= ymax:
+                        logger.warning(f"Invalid box coordinates: {box}")
+                        continue
+                    if xmin < 0 or ymin < 0 or xmax > image.width or ymax > image.height:
+                        logger.warning(f"Coordinates out of bounds: {box}")
+                        # Clamp to image boundaries
+                        box[0] = max(0, min(xmin, image.width))
+                        box[1] = max(0, min(ymin, image.height))
+                        box[2] = max(0, min(xmax, image.width))
+                        box[3] = max(0, min(ymax, image.height))
 
-            return raw_output, scaled_boxes
+                return raw_output, scaled_boxes
+            else:
+                logger.warning("Invalid coordinate format")
+                return raw_output, []
 
         except Exception as e:
             logger.error(f"Inference error: {e}")

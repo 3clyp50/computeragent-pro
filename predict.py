@@ -1,3 +1,4 @@
+import re
 import requests
 import urllib3
 # Disable SSL verification warnings
@@ -36,10 +37,30 @@ def test_prediction(image_path: str, prompt: str = "Refresh Status"):
         print(f"Headers: {dict(response.headers)}")
         print(f"Raw response content: {response.content.decode('utf-8')}")
 
-        if response.status_code != 200:
-            print(f"Full response: {response.text}")
-            if 'location' in response.headers:
-                print(f"Redirect location: {response.headers['location']}")
+        if response.status_code == 200:
+            json_response = response.json()
+            print("Response:", json_response)
+            if 'prediction' in json_response:
+                print("\nRaw prediction string:", json_response['prediction'])
+
+                # Extract both coordinate formats
+                box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
+                box_match = re.search(box_pattern, json_response['prediction'])
+                if box_match:
+                    print("\nOriginal box coordinates:", box_match.group(1))
+
+                # Extract final coordinates
+                coord_str = json_response['prediction'].split('[[')[1].split(']]')[0]
+                coords = [float(x.strip()) for x in coord_str.split(',')]
+                print("\nFinal scaled coordinates:")
+                print(f"x1: {coords[0]}, y1: {coords[1]}")
+                print(f"x2: {coords[2]}, y2: {coords[3]}")
+
+                # Validate coordinates
+                if coords[2] > coords[0] and coords[3] > coords[1]:
+                    print("✓ Coordinates are properly ordered (x2 > x1, y2 > y1)")
+                else:
+                    print("⚠ Warning: Coordinates are not properly ordered")
         else:
             try:
                 json_response = response.json()
