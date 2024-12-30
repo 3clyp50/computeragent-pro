@@ -86,22 +86,10 @@ async def predict(
                 detail=f"Error reading file: {str(read_error)}"
             )
 
-        # Validate and process image
+        # Open image
         try:
             image = Image.open(io.BytesIO(image_data))
-            logger.debug(f"Image format: {image.format}, Mode: {image.mode}, Size: {image.size}")
-            
-            # Convert to RGB if needed
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-                logger.debug(f"Converted image to RGB mode")
-            
-            # Validate image dimensions
-            if image.size[0] > 2048 or image.size[1] > 2048:
-                logger.warning(f"Large image detected: {image.size}")
-                image.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-                logger.debug(f"Resized image to: {image.size}")
-                
+            logger.debug(f"Image opened successfully")
         except Exception as img_error:
             logger.error(f"Image processing error: {img_error}")
             raise HTTPException(
@@ -116,7 +104,7 @@ async def predict(
         elif len(prompt) > 500:
             logger.warning("Prompt too long, truncating")
             prompt = prompt[:500]
-
+           
         # Run inference
         try:
             logger.info("Starting inference")
