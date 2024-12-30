@@ -29,15 +29,11 @@ def image_to_base64(image: Image.Image) -> str:
 def draw_bounding_boxes(
     image: Image.Image, bounding_boxes: list, outline_color="red", line_width=2
 ) -> Image.Image:
-    """Draw bounding boxes on a copy of the given image (for debug visualization)."""
+    """Draw bounding boxes on the given image (for debug/visual checks)."""
     draw = ImageDraw.Draw(image)
     for box in bounding_boxes:
         xmin, ymin, xmax, ymax = box
-        draw.rectangle(
-            [xmin, ymin, xmax, ymax],
-            outline=outline_color,
-            width=line_width
-        )
+        draw.rectangle([xmin, ymin, xmax, ymax], outline=outline_color, width=line_width)
     return image
 
 
@@ -49,8 +45,8 @@ def rescale_bounding_boxes(
     scaled_height=1000
 ) -> list:
     """
-    Rescale bounding boxes from model coordinate space (e.g. 1000x1000) to actual
-    image dimensions.
+    Rescale bounding boxes from model coordinate space (e.g. 1000x1000) 
+    to actual image dimensions.
     """
     x_scale = original_width / scaled_width
     y_scale = original_height / scaled_height
@@ -63,18 +59,18 @@ def rescale_bounding_boxes(
 
         xmin, ymin, xmax, ymax = box
 
-        # Keep coordinates within [0, scaled_width/height]
+        # Clamp values within the scaled dimensions
         xmin = max(0, min(scaled_width, xmin))
         ymin = max(0, min(scaled_height, ymin))
         xmax = max(0, min(scaled_width, xmax))
         ymax = max(0, min(scaled_height, ymax))
 
-        # Scale them to the real image size
+        # Scale to real image dimensions
         rescaled_box = [
             round(xmin * x_scale, 2),
             round(ymin * y_scale, 2),
             round(xmax * x_scale, 2),
-            round(ymax * y_scale, 2)
+            round(ymax * y_scale, 2),
         ]
         rescaled_boxes.append(rescaled_box)
 
@@ -92,15 +88,15 @@ class ModelInference:
             cache_dir = get_cache_dir()
             local_model_path = os.path.join(cache_dir, settings.MODEL_NAME.split('/')[-1])
 
-            # Load from cache if available
+            # Load from local cache if available
             if os.path.exists(local_model_path):
                 logger.info(f"Loading model from cache: {local_model_path}")
                 self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                     local_model_path,
                     torch_dtype=(
                         getattr(torch, settings.TORCH_DTYPE.upper(), torch.float32)
-                        if settings.TORCH_DTYPE != "auto"
-                        else "auto"
+                        if settings.TORCH_DTYPE != "auto" else
+                        "auto"
                     ),
                     device_map=settings.DEVICE_MAP,
                     local_files_only=True
@@ -111,8 +107,8 @@ class ModelInference:
                     settings.MODEL_NAME,
                     torch_dtype=(
                         getattr(torch, settings.TORCH_DTYPE.upper(), torch.float32)
-                        if settings.TORCH_DTYPE != "auto"
-                        else "auto"
+                        if settings.TORCH_DTYPE != "auto" else
+                        "auto"
                     ),
                     device_map=settings.DEVICE_MAP,
                     cache_dir=cache_dir
@@ -155,11 +151,11 @@ class ModelInference:
 
     def infer(self, image: Image.Image, command: str):
         """
-        Perform inference to find tight bounding box coordinates of the UI element
-        matching the given command. Returns the recognized bounding box coordinates.
+        Perform inference to find bounding-box coordinates of the UI element
+        matching the given command. Returns (raw_output_text, [scaled_box]).
         """
         try:
-            # Construct the prompt to match your HF example more closely
+            # Prompt match your HF example
             prompt_text = (
                 f"In this UI screenshot, what is the position of the element "
                 f'corresponding to the command "{command}" (with bbox)?'
@@ -169,14 +165,8 @@ class ModelInference:
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image",
-                            "image": f"data:image;base64,{image_to_base64(image)}"
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt_text
-                        },
+                        {"type": "image", "image": f"data:image;base64,{image_to_base64(image)}"},
+                        {"type": "text", "text": prompt_text},
                     ],
                 }
             ]
@@ -193,23 +183,21 @@ class ModelInference:
 
             # Build model inputs
             image_inputs, video_inputs = process_vision_info(messages)
+
             inputs = self.processor(
                 text=[text_for_model],
                 images=image_inputs,
                 videos=video_inputs,
                 padding=True,
-                return_tensors="pt"
+                return_tensors="pt",
             )
             inputs = inputs.to(self.device)
 
             # Generate output
             with torch.no_grad():
-                generated_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=128
-                )
+                generated_ids = self.model.generate(**inputs, max_new_tokens=128)
 
-            # Remove the original prompt tokens from the result
+            # Remove tokens from the original prompt
             generated_ids_trimmed = [
                 out_ids[len(in_ids):]
                 for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -224,7 +212,7 @@ class ModelInference:
             raw_output = outputs[0]
             logger.debug(f"Raw model output: {raw_output}")
 
-            # Extract bounding boxes using your HF approach
+            # Regex patterns for Qwen2VL bounding-box outputs
             object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
             box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
 
@@ -233,33 +221,51 @@ class ModelInference:
                 logger.warning("No object reference found in model output.")
                 return raw_output, []
 
-            box_content = re.search(box_pattern, raw_output)
-            if not box_content:
+            box_content_match = re.search(box_pattern, raw_output)
+            if not box_content_match:
                 logger.warning("No box coordinates found in model output.")
                 return raw_output, []
 
-            # Expect something like: [512.73, 540.36, 701.055, 589.76]
-            coords_str = box_content.group(1).strip("[]")
-            try:
-                coords = [float(x.strip()) for x in coords_str.split(",")]
-                if len(coords) != 4:
-                    logger.warning(f"Invalid bounding box format: {coords}")
-                    return raw_output, []
+            # Here is where we handle parentheses instead of bracketed coords
+            # Example: raw "box_content" might look like "(88,164),(912,839)"
+            box_content = box_content_match.group(1).strip()
+            logger.debug(f"Box content extracted: {box_content}")
 
-                # Convert coords to array of [xmin, ymin, xmax, ymax]
-                boxes = [[coords[0], coords[1], coords[2], coords[3]]]
+            # Split on ")," to handle each pair
+            pairs = box_content.split("),")
+            parsed_pairs = []
+            for pair in pairs:
+                # Remove possible leftover parentheses
+                pair = pair.strip("()")
+                # Now we expect something like "88,164"
+                xy = pair.split(",")
+                if len(xy) != 2:
+                    logger.warning(f"Skipping invalid coordinate pair: {pair}")
+                    continue
+                try:
+                    x_val = float(xy[0].strip())
+                    y_val = float(xy[1].strip())
+                    parsed_pairs.append((x_val, y_val))
+                except ValueError as e:
+                    logger.warning(f"Could not parse float from {xy}: {e}")
 
-                # Rescale to image dimensions
-                scaled_boxes = rescale_bounding_boxes(
-                    boxes,
-                    original_width=image.width,
-                    original_height=image.height
+            if len(parsed_pairs) != 2:
+                logger.warning(
+                    f"Expected exactly 2 coordinate pairs for bounding box, got {len(parsed_pairs)}"
                 )
-
-                return raw_output, scaled_boxes
-            except ValueError as e:
-                logger.error(f"Error parsing bounding box coordinates: {e}")
                 return raw_output, []
+
+            (xmin, ymin), (xmax, ymax) = parsed_pairs
+            boxes = [[xmin, ymin, xmax, ymax]]
+
+            # Rescale the boxes to the actual image size
+            scaled_boxes = rescale_bounding_boxes(
+                boxes,
+                original_width=image.width,
+                original_height=image.height
+            )
+
+            return raw_output, scaled_boxes
 
         except Exception as e:
             logger.error(f"Inference error: {e}")
