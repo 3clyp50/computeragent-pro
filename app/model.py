@@ -45,22 +45,37 @@ def rescale_bounding_boxes(
     scaled_height=1000
 ) -> list:
     """
-    Rescale bounding boxes from model coordinate space to actual image dimensions.
+    Rescale bounding boxes from model coordinate space (e.g. 1000x1000) 
+    to actual image dimensions.
     """
     x_scale = original_width / scaled_width
     y_scale = original_height / scaled_height
 
     rescaled_boxes = []
     for box in bounding_boxes:
+        if len(box) != 4:
+            logger.warning(f"Skipping invalid bounding box entry: {box}")
+            continue
+
         xmin, ymin, xmax, ymax = box
+
+        # Clamp values within the scaled dimensions
+        xmin = max(0, min(scaled_width, xmin))
+        ymin = max(0, min(scaled_height, ymin))
+        xmax = max(0, min(scaled_width, xmax))
+        ymax = max(0, min(scaled_height, ymax))
+
+        # Scale to real image dimensions
         rescaled_box = [
             round(xmin * x_scale, 2),
             round(ymin * y_scale, 2),
             round(xmax * x_scale, 2),
-            round(ymax * y_scale, 2)
+            round(ymax * y_scale, 2),
         ]
         rescaled_boxes.append(rescaled_box)
+
     return rescaled_boxes
+
 
 class ModelInference:
     def __init__(self):
@@ -197,7 +212,7 @@ class ModelInference:
             raw_output = outputs[0]
             logger.debug(f"Raw model output: {raw_output}")
 
-            # Extract box coordinates using the same logic as the working implementation
+            # Regex patterns for Qwen2VL bounding-box outputs
             object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
             box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
 
@@ -211,47 +226,43 @@ class ModelInference:
                 logger.warning("No box coordinates found in model output.")
                 return raw_output, []
 
-            box_content = box_content_match.group(1)
+            # Here is where we handle parentheses instead of bracketed coords
+            # Example: raw "box_content" might look like "(88,164),(912,839)"
+            box_content = box_content_match.group(1).strip()
+            logger.debug(f"Box content extracted: {box_content}")
 
-            # Parse coordinates similar to the working implementation
-            boxes = []
-            try:
-                # Split into coordinate pairs and parse
-                coords = [tuple(map(float, pair.strip("()").split(','))) 
-                        for pair in box_content.split("),(")]
-
-                if len(coords) == 2:
-                    # Convert from two points format to [xmin, ymin, xmax, ymax] format
-                    boxes = [[coords[0][0], coords[0][1], coords[1][0], coords[1][1]]]
-
-                # Ensure coordinates are within valid ranges (0-1000 for the model's coordinate space)
-                boxes = [[
-                    max(0, min(1000, x1)),
-                    max(0, min(1000, y1)),
-                    max(0, min(1000, x2)),
-                    max(0, min(1000, y2))
-                ] for x1, y1, x2, y2 in boxes]
-
-            except Exception as e:
-                logger.warning(f"Error parsing coordinates: {e}")
-                # Fallback to direct number parsing if the format is different
+            # Split on ")," to handle each pair
+            pairs = box_content.split("),")
+            parsed_pairs = []
+            for pair in pairs:
+                # Remove possible leftover parentheses
+                pair = pair.strip("()")
+                # Now we expect something like "88,164"
+                xy = pair.split(",")
+                if len(xy) != 2:
+                    logger.warning(f"Skipping invalid coordinate pair: {pair}")
+                    continue
                 try:
-                    # Handle case where model outputs direct [x1, y1, x2, y2] format
-                    numbers = re.findall(r"[-+]?\d*\.\d+|\d+", box_content)
-                    if len(numbers) >= 4:
-                        boxes = [[float(numbers[0]), float(numbers[1]), 
-                                float(numbers[2]), float(numbers[3])]]
-                except Exception as e2:
-                    logger.error(f"Fallback parsing failed: {e2}")
-                    return raw_output, []
+                    x_val = float(xy[0].strip())
+                    y_val = float(xy[1].strip())
+                    parsed_pairs.append((x_val, y_val))
+                except ValueError as e:
+                    logger.warning(f"Could not parse float from {xy}: {e}")
 
-            # Scale the boxes to the actual image dimensions
+            if len(parsed_pairs) != 2:
+                logger.warning(
+                    f"Expected exactly 2 coordinate pairs for bounding box, got {len(parsed_pairs)}"
+                )
+                return raw_output, []
+
+            (xmin, ymin), (xmax, ymax) = parsed_pairs
+            boxes = [[xmin, ymin, xmax, ymax]]
+
+            # Rescale the boxes to the actual image size
             scaled_boxes = rescale_bounding_boxes(
                 boxes,
                 original_width=image.width,
-                original_height=image.height,
-                scaled_width=1000,  # Model's coordinate space
-                scaled_height=1000
+                original_height=image.height
             )
 
             return raw_output, scaled_boxes
