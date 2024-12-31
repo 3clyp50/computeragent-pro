@@ -27,33 +27,18 @@ def draw_bounding_boxes(image, bounding_boxes, outline_color="red", line_width=2
     return image
 
 def rescale_bounding_boxes(bounding_boxes, original_width, original_height, scaled_width=1000, scaled_height=1000):
-    """Rescale bounding boxes from model coordinates to image dimensions"""
-    # Calculate scaling factors
     x_scale = original_width / scaled_width
     y_scale = original_height / scaled_height
-    
     rescaled_boxes = []
     for box in bounding_boxes:
-        if len(box) != 4:
-            continue
-            
         xmin, ymin, xmax, ymax = box
-        
-        # Ensure coordinates are within bounds
-        xmin = max(0, min(scaled_width, xmin))
-        ymin = max(0, min(scaled_height, ymin))
-        xmax = max(0, min(scaled_width, xmax))
-        ymax = max(0, min(scaled_height, ymax))
-        
-        # Apply scaling
         rescaled_box = [
-            round(xmin * x_scale, 2),
-            round(ymin * y_scale, 2),
-            round(xmax * x_scale, 2),
-            round(ymax * y_scale, 2)
+            xmin * x_scale,
+            ymin * y_scale,
+            xmax * x_scale,
+            ymax * y_scale
         ]
         rescaled_boxes.append(rescaled_box)
-    
     return rescaled_boxes
 
 class ModelInference:
@@ -114,8 +99,8 @@ class ModelInference:
 
     def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
         try:
-            # Format messages to request precise button coordinates with emphasis on tight boundaries
-            prompt = f"Find the exact pixel coordinates of the button labeled \"{prompt}\" in this UI screenshot. Return a tight bounding box that includes ONLY the button element itself, excluding any surrounding margins or content. The coordinates should be as precise as possible."
+            # Format prompt and messages similar to the example
+            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
             messages = [
                 {
                     "role": "user",
@@ -148,7 +133,7 @@ class ModelInference:
                     return_tensors="pt"
                 )
                 inputs = inputs.to(self.device)
-                
+
                 with torch.no_grad():
                     generated_ids = self.model.generate(
                         **inputs,
@@ -159,57 +144,44 @@ class ModelInference:
                     out_ids[len(in_ids):] 
                     for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
                 ]
-                
+
                 output_text = self.processor.batch_decode(
                     generated_ids_trimmed,
                     skip_special_tokens=False,
                     clean_up_tokenization_spaces=False
                 )
-                
-                # Process output and extract coordinates exactly like HuggingFace Space
+
+                # Process output text
                 text = output_text[0]
                 logger.debug(f"Raw model output: {text}")
-                
+
                 # Extract coordinates using regex patterns
                 import re
                 object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
                 box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
 
-                object_ref = re.search(object_ref_pattern, text)
-                if not object_ref:
-                    logger.warning("No object reference found in model output")
-                    return text, []
-                    
-                box_content = re.search(box_pattern, text)
-                if not box_content:
-                    logger.warning("No box coordinates found in model output")
+                try:
+                    object_ref = re.search(object_ref_pattern, text).group(1)
+                    box_content = re.search(box_pattern, text).group(1)
+
+                    # Parse coordinates in the same format as the example
+                    boxes = [tuple(map(int, pair.strip("()").split(','))) 
+                            for pair in box_content.split("),(")]
+                    boxes = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
+
+                    # Scale boxes to image dimensions
+                    scaled_boxes = rescale_bounding_boxes(boxes, image.width, image.height)
+
+                    # Draw boxes for visualization (optional)
+                    draw_bounding_boxes(image.copy(), scaled_boxes)
+
+                    # Return object reference and scaled coordinates
+                    return object_ref, scaled_boxes
+
+                except (AttributeError, IndexError, ValueError) as e:
+                    logger.error(f"Error parsing model output: {e}")
                     return text, []
 
-                # Parse coordinates - expect format [x1,y1,x2,y2]
-                try:
-                    # Clean up the box content and parse as a list of floats
-                    coords_str = box_content.group(1).strip('[]')
-                    coords = [float(x.strip()) for x in coords_str.split(',')]
-                    
-                    if len(coords) != 4:
-                        logger.warning(f"Invalid coordinate format: {coords}")
-                        return []
-                    
-                    # Create box in [x1,y1,x2,y2] format
-                    box = [[coords[0], coords[1], coords[2], coords[3]]]
-                    
-                    # Scale boxes to image dimensions
-                    scaled_boxes = rescale_bounding_boxes(box, image.width, image.height)
-                    
-                    # Draw boxes internally to help model determine coordinates
-                    draw_bounding_boxes(image.copy(), scaled_boxes)
-                    
-                    # Return only the scaled coordinates
-                    return scaled_boxes[0] if scaled_boxes else []
-                except ValueError as e:
-                    logger.error(f"Error parsing coordinates: {e}")
-                    return []
-                
             except Exception as e:
                 logger.error(f"Error processing output: {e}")
                 raise
