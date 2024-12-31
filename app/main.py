@@ -64,8 +64,8 @@ async def health_check():
 
 @app.post("/predict", response_model=InferenceResponse)
 async def predict(
+    prompt: str,
     file: UploadFile = File(...), 
-    prompt: str = "Describe this image",
     api_key: str = Depends(get_api_key)
 ):
     try:
@@ -97,11 +97,8 @@ async def predict(
                 detail=f"Invalid image format or corrupted file: {str(img_error)}"
             )
 
-        # Validate prompt
-        if not prompt or len(prompt.strip()) == 0:
-            prompt = "Describe this image"
-            logger.warning("Empty prompt received, using default")
-        elif len(prompt) > 500:
+        # Validate prompt length
+        if len(prompt) > 500:
             logger.warning("Prompt too long, truncating")
             prompt = prompt[:500]
         
