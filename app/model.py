@@ -8,6 +8,10 @@ import base64
 from io import BytesIO
 import os
 
+# NEW import for streaming
+import threading
+from transformers import TextIteratorStreamer
+
 logger = logging.getLogger("uvicorn.error")
 
 def get_cache_dir():
@@ -188,4 +192,73 @@ class ModelInference:
 
         except Exception as e:
             logger.error(f"Inference error: {e}")
+            raise e
+
+    def stream_infer(self, image: Image.Image, prompt: str):
+        """
+        Streaming inference method – yields partial tokens as they are generated.
+        Bounding-box extraction typically requires the *full* output, so we omit it here.
+        If you want to parse bounding boxes, you should do so after collecting all tokens.
+        """
+        try:
+            # Format prompt and messages
+            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": f"data:image;base64,{image_to_base64(image)}"},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+
+            # Process text input
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+            # Prepare model inputs
+            image_inputs, video_inputs = process_vision_info(messages)
+            inputs = self.processor(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt"
+            )
+            inputs = inputs.to(self.device)
+
+            # Create a streamer for partial token output
+            # Note: Qwen2VL's AutoProcessor may not include a 'tokenizer' property by default.
+            # If that's the case, you might need to load or create a tokenizer manually.
+            tokenizer = self.processor.tokenizer
+
+            streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=False)
+
+            # We run generate in a separate thread so we can yield tokens as they arrive
+            generation_kwargs = {
+                **inputs,
+                "max_new_tokens": 128,
+                "streamer": streamer
+            }
+
+            def _generate():
+                with torch.no_grad():
+                    self.model.generate(**generation_kwargs)
+
+            thread = threading.Thread(target=_generate)
+            thread.start()
+
+            # Iterate over tokens from the streamer
+            for new_text in streamer:
+                # Each `new_text` is typically the next token (or group of tokens).
+                # Yield it immediately to the client.
+                yield new_text
+
+            # Ensure the thread is done
+            thread.join()
+
+        except Exception as e:
+            logger.error(f"Streaming inference error: {e}")
+            # In case of error, yield or raise
+            yield f"[ERROR] {str(e)}"
             raise e

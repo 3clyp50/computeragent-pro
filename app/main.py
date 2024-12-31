@@ -1,6 +1,6 @@
 import logging
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -172,12 +172,9 @@ async def predict(
             }
         )
 
-
 # --------------------------
-# New endpoint for /api/chat
+# Endpoint for /api/chat
 # --------------------------
-
-# 1. Create Pydantic models to parse the request body.
 
 class ChatMessage(BaseModel):
     role: str
@@ -192,7 +189,6 @@ class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     tools: List[Any] = []
 
-# 2. Create the /api/chat endpoint.
 @app.post("/api/chat")
 async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_api_key)):
     """
@@ -255,34 +251,36 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
             logger.warning("Prompt too long, truncating")
             prompt = prompt[:500]
 
-        # Run inference
-        logger.info("Starting inference from /api/chat")
-        try:
-            inference_result = model_inference.infer(image, prompt)
-        except Exception as inf_error:
-            error_msg = str(inf_error)
-            logger.error(f"Inference error: {error_msg}")
-            # Handle known inference errors (similar to /predict)
-            if "CUDA out of memory" in error_msg:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Server is currently overloaded. Please try again later."
-                )
-            # ... handle other known errors if needed ...
-            raise HTTPException(
-                status_code=500,
-                detail="An unexpected error occurred during inference."
-            )
+        # Decide how to respond based on stream parameter
+        if chat_request.stream:
+            logger.info("Starting streaming inference from /api/chat")
 
-        # Construct a response. For example, if your model output is textual:
-        response_content = {
-            "status": "success",
-            "model": chat_request.model,
-            "prompt": prompt,
-            "inference_result": str(inference_result),
-        }
-        return JSONResponse(status_code=200, content=response_content)
-    
+            def token_generator():
+                try:
+                    for token in model_inference.stream_infer(image, prompt):
+                        yield token
+                except Exception as e:
+                    logger.error(f"Error while streaming tokens: {str(e)}")
+                    # You can optionally yield a final error token or raise.
+                    # yield f"[ERROR] {str(e)}"
+                    raise e
+
+            # Return a StreamingResponse. 
+            # Use "text/event-stream" if you want SSE, or "text/plain" if it's plain text streaming.
+            return StreamingResponse(token_generator(), media_type="text/plain")
+
+        else:
+            logger.info("Starting normal (non-streaming) inference from /api/chat")
+            # Non-streaming: gather the full response
+            inference_result = model_inference.infer(image, prompt)
+            response_content = {
+                "status": "success",
+                "model": chat_request.model,
+                "prompt": prompt,
+                "inference_result": str(inference_result),
+            }
+            return JSONResponse(status_code=200, content=response_content)
+
     except HTTPException:
         raise
     except Exception as e:
