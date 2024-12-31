@@ -1,5 +1,5 @@
 import logging
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Request
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,7 +64,7 @@ async def health_check():
 
 @app.post("/predict", response_model=InferenceResponse)
 async def predict(
-    prompt: str,
+    prompt: str = Form(...),
     file: UploadFile = File(...), 
     api_key: str = Depends(get_api_key)
 ):
