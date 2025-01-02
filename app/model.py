@@ -5,6 +5,7 @@ from qwen_vl_utils import process_vision_info
 from .config import settings
 import logging
 import base64
+from typing import List
 from io import BytesIO
 import os
 
@@ -17,13 +18,14 @@ logger = logging.getLogger("uvicorn.error")
 def get_cache_dir():
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), "model_cache")
 
-def image_to_base64(image):
+def image_to_base64(image: Image.Image) -> str:
     buffered = BytesIO()
     image.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return img_str
 
-def draw_bounding_boxes(image, bounding_boxes, outline_color="red", line_width=2):
+def draw_bounding_boxes(image: Image.Image, bounding_boxes: List[List[int]], 
+                       outline_color: str = "red", line_width: int = 2) -> Image.Image:
     draw = ImageDraw.Draw(image)
     for box in bounding_boxes:
         xmin, ymin, xmax, ymax = box

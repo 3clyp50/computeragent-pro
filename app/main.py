@@ -7,11 +7,13 @@ from starlette.requests import Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from .config import settings
-from .model import ModelInference
-from .schemas import InferenceResponse
+from .model import ModelInference, draw_bounding_boxes, image_to_base64
+from .schemas import ChatRequest, InferenceResponse
 import base64
 from PIL import Image
 import io
+from io import BytesIO
+
 
 # Initialize logger
 logger = logging.getLogger("uvicorn.error")
@@ -64,222 +66,88 @@ model_inference = ModelInference()
 async def health_check():
     return {"status": "ok", "environment": settings.ENVIRONMENT}
 
-@app.post("/predict", response_model=InferenceResponse)
-async def predict(
-    prompt: str = Form(...),
-    file: UploadFile = File(...), 
-    api_key: str = Depends(get_api_key)
-):
-    try:
-        logger.info(f"Received a prediction request for file: {file.filename}")
-        
-        # Validate file size
-        try:
-            image_data = await file.read()
-            if len(image_data) > 10 * 1024 * 1024:  # 10MB limit
-                raise HTTPException(
-                    status_code=400,
-                    detail="File size too large. Maximum size is 10MB."
-                )
-        except Exception as read_error:
-            logger.error(f"Error reading file: {read_error}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Error reading file: {str(read_error)}"
-            )
 
-        # Open image
-        try:
-            image = Image.open(io.BytesIO(image_data))
-            logger.debug(f"Image opened successfully")
-        except Exception as img_error:
-            logger.error(f"Image processing error: {img_error}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid image format or corrupted file: {str(img_error)}"
-            )
-
-        # Validate prompt length
-        if len(prompt) > 500:
-            logger.warning("Prompt too long, truncating")
-            prompt = prompt[:500]
-        
-        # Run inference
-        try:
-            logger.info("Starting inference")
-            coordinates = model_inference.infer(image, prompt)
-            
-            if not coordinates:
-                logger.warning("No coordinates found")
-                return InferenceResponse(
-                    status="success",
-                    prediction="[]"  # Return empty list when no coordinates found
-                )
-            
-            logger.info("Inference completed successfully")
-            return InferenceResponse(
-                status="success",
-                prediction=str(coordinates)  # Return just the coordinates
-            )
-            
-        except Exception as inf_error:
-            error_msg = str(inf_error)
-            logger.error(f"Inference error: {error_msg}")
-            
-            if "CUDA out of memory" in error_msg:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Server is currently overloaded. Please try again later."
-                )
-            elif "No valid tokens to decode" in error_msg:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Model generated invalid output. Please try again with a different prompt."
-                )
-            elif "Empty output after cleanup" in error_msg:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Model generated empty response. Please try again with a different prompt."
-                )
-            elif "No image inputs processed" in error_msg:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Failed to process image input. Please ensure the image is valid."
-                )
-            elif "list index out of range" in error_msg:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Error processing model output. This is likely due to an unexpected model response format."
-                )
-            else:
-                logger.error(f"Unhandled inference error: {error_msg}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="An unexpected error occurred during inference."
-                )
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Unexpected error during prediction: {error_msg}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "message": "Internal server error",
-                "detail": error_msg if settings.ENVIRONMENT == "development" else None
-            }
-        )
-
-# --------------------------
-# Endpoint for /api/chat
-# --------------------------
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-    images: Optional[List[str]] = []
-
-class ChatRequest(BaseModel):
-    model: str
-    stream: bool
-    options: Dict[str, Any]
-    format: str
-    messages: List[ChatMessage]
-    tools: List[Any] = []
-
-@app.post("/api/chat")
+@app.post("/api/chat", response_model=InferenceResponse)
 async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_api_key)):
     """
-    Example endpoint to handle a request like:
-    
-    curl -H 'Host: 127.0.0.1:11434' --compressed -H 'Connection: keep-alive' \
-         -H 'content-type: application/json' -H 'accept: application/json' \
-         -H 'user-agent: ollama-python/0.4.4 (x86_64 linux) Python/3.12.8' \
-         -X POST http://127.0.0.1:11434/api/chat \
-         -d '{"model": "moondream", "stream": true, "options": {}, "format": "", "messages": [{"role": "user", "content": "Describe the provided image in detail.", "images": ["<base64_encoded_image>"]}], "tools": []}'
+    Handles chat requests by replacing the /predict endpoint.
+    Accepts JSON payload with base64-encoded images.
     """
     try:
-        # For demonstration, we’ll only use the FIRST user message if multiple are provided.
         if not chat_request.messages:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No messages provided in the request."
             )
 
+        # Assuming the first message contains the user prompt and image
         user_message = chat_request.messages[0]
         prompt = user_message.content.strip()
 
-        # Check if there's at least one image in the user's message.
         if not user_message.images:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No images found in the request."
             )
 
-        # Decode the first base64 image for inference
-        base64_str = user_message.images[0]
+        # Decode the first base64 image
+        base64_str = user_message.images[0].content
         try:
             image_data = base64.b64decode(base64_str)
         except Exception as e:
             logger.error(f"Error decoding base64 image: {e}")
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid base64 encoding for image."
             )
 
-        # Optional: check file size (e.g., 10MB limit)
+        # Check file size (e.g., 10MB limit)
         if len(image_data) > 10 * 1024 * 1024:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Image size too large. Maximum size is 10MB."
             )
 
-        # Open the image from bytes
+        # Open the image
         try:
-            image = Image.open(io.BytesIO(image_data))
+            image = Image.open(BytesIO(image_data))
         except Exception as e:
             logger.error(f"Image open error: {e}")
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Could not open the provided image. Possibly corrupted or invalid format."
             )
 
-        # Truncate prompt if needed
+        # Truncate prompt if necessary
         if len(prompt) > 500:
             logger.warning("Prompt too long, truncating")
             prompt = prompt[:500]
 
-        # Decide how to respond based on stream parameter
         if chat_request.stream:
             logger.info("Starting streaming inference from /api/chat")
 
-            def token_generator():
-                try:
-                    for token in model_inference.stream_infer(image, prompt):
-                        yield token
-                except Exception as e:
-                    logger.error(f"Error while streaming tokens: {str(e)}")
-                    # You can optionally yield a final error token or raise.
-                    # yield f"[ERROR] {str(e)}"
-                    raise e
-
-            # Return a StreamingResponse. 
-            # Use "text/event-stream" if you want SSE, or "text/plain" if it's plain text streaming.
-            return StreamingResponse(token_generator(), media_type="text/plain")
-
+            token_generator = model_inference.stream_infer(image, prompt)
+            return StreamingResponse(token_generator, media_type="text/plain")
         else:
             logger.info("Starting normal (non-streaming) inference from /api/chat")
-            # Non-streaming: gather the full response
-            inference_result = model_inference.infer(image, prompt)
-            response_content = {
-                "status": "success",
-                "model": chat_request.model,
-                "prompt": prompt,
-                "inference_result": str(inference_result),
-            }
-            return JSONResponse(status_code=200, content=response_content)
+            object_ref, coordinates = model_inference.infer(image, prompt)
+
+            if not coordinates:
+                logger.warning("No coordinates found")
+                return InferenceResponse(
+                    status="success",
+                    prediction="[]",  # Return empty list when no coordinates found
+                    annotated_image=None
+                )
+
+            # Optionally, you can return an annotated image
+            annotated_image = image_to_base64(draw_bounding_boxes(image.copy(), coordinates))
+
+            return InferenceResponse(
+                status="success",
+                prediction=str(coordinates),
+                annotated_image=annotated_image
+            )
 
     except HTTPException:
         raise
@@ -287,7 +155,7 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
         error_msg = str(e)
         logger.error(f"Unexpected error during /api/chat: {error_msg}")
         return JSONResponse(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "status": "error",
                 "message": "Internal server error",
