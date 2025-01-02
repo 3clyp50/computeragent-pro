@@ -5,6 +5,7 @@ from qwen_vl_utils import process_vision_info
 from .config import settings
 import logging
 import base64
+from typing import List
 from io import BytesIO
 import os
 
@@ -17,13 +18,14 @@ logger = logging.getLogger("uvicorn.error")
 def get_cache_dir():
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), "model_cache")
 
-def image_to_base64(image):
+def image_to_base64(image: Image.Image) -> str:
     buffered = BytesIO()
     image.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return img_str
 
-def draw_bounding_boxes(image, bounding_boxes, outline_color="red", line_width=2):
+def draw_bounding_boxes(image: Image.Image, bounding_boxes: List[List[int]], 
+                       outline_color: str = "red", line_width: int = 2) -> Image.Image:
     draw = ImageDraw.Draw(image)
     for box in bounding_boxes:
         xmin, ymin, xmax, ymax = box
@@ -105,6 +107,8 @@ class ModelInference:
         try:
             # Format prompt and messages similar to the example
             prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
+            logger.info(f"Formatted prompt: {prompt}")
+            
             messages = [
                 {
                     "role": "user",
@@ -128,6 +132,7 @@ class ModelInference:
 
             # Process inputs and generate output
             try:
+                logger.info("Processing image inputs...")
                 image_inputs, video_inputs = process_vision_info(messages)
                 inputs = self.processor(
                     text=[text],
@@ -137,12 +142,15 @@ class ModelInference:
                     return_tensors="pt"
                 )
                 inputs = inputs.to(self.device)
+                logger.info("Inputs processed and moved to device")
 
+                logger.info("Starting model generation...")
                 with torch.no_grad():
                     generated_ids = self.model.generate(
                         **inputs,
                         max_new_tokens=128
                     )
+                logger.info("Model generation completed")
 
                 generated_ids_trimmed = [
                     out_ids[len(in_ids):] 
@@ -157,7 +165,7 @@ class ModelInference:
 
                 # Process output text
                 text = output_text[0]
-                logger.debug(f"Raw model output: {text}")
+                logger.info(f"Raw model output: {text}")
 
                 # Extract coordinates using regex patterns
                 import re
