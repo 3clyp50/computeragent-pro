@@ -40,7 +40,7 @@ def test_non_streaming(api_url, api_key):
 
     headers = {
         "Content-Type": "application/json",
-        "X-API-Key": api_key
+        "X-API-Key": api_key()
     }
 
     response = requests.post(api_url, headers=headers, data=json.dumps(payload))
@@ -73,7 +73,7 @@ def test_streaming(api_url, api_key):
 
     headers = {
         "Content-Type": "application/json",
-        "X-API-Key": api_key
+        "X-API-Key": api_key()
     }
 
     response = requests.post(api_url, headers=headers, data=json.dumps(payload), stream=True)
