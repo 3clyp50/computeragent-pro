@@ -36,7 +36,7 @@ def get_coordinates(image_path: str, prompt: str, stream: bool = False):
 
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": api_key()
+            "X-API-Key": os.getenv('AI_AGENT_KEY', 'Missing API key')
         }
 
         if stream:
