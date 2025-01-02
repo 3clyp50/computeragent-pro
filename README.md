@@ -1,181 +1,214 @@
 # ComputerAgent Pro Vision API Documentation
 
 ## Overview
-The ComputerAgent Pro Vision API provides advanced image analysis capabilities, specifically designed for extracting precise pixel coordinates of UI elements based on textual descriptions using [OS-Copilot's OS-Atlas-Base-7B Model](https://huggingface.co/OS-Copilot/OS-Atlas-Base-7B)
 
-This API is capable of identifying and locating UI components such as buttons, text fields, and icons within images, making it a powerful tool for automating UI testing and enhancing user experience.
+ComputerAgent Pro Vision API provides advanced image analysis capabilities for extracting precise pixel coordinates of UI elements based on textual descriptions. The API supports two request formats:
 
-## Endpoint
-- **URL**: `https://computeragent.pro/predict`
-- **Method**: `POST`
+1. Form-data format (multipart/form-data)
+2. JSON format (OpenAI-compatible)
 
 ## Authentication
-- **Type**: API Key Authentication
-- **Header**: `X-API-Key`
-- **Required**: Yes (in production environment)
 
-## Request Parameters
+All requests require API key authentication using the `X-API-Key` header.
 
-### Multipart Form Data
-| Parameter | Type | Required | Description | Default |
-|-----------|------|----------|-------------|---------|
-| `file` | File | Yes | Screenshot or UI image to analyze | - |
-| `prompt` | String | No | Description of the element to locate | "Describe this image" |
-
-### cURL Request
 ```bash
-curl -X POST https://computeragent.pro/predict \
-  -H "X-API-Key: your_computeragent_api_key" \
-  -F "file=@screenshot.jpg" \
-  -F "prompt=Find the login button"
+X-API-Key: your-api-key
 ```
 
-### Python Request
+## API Endpoints
+
+### Element Location (Form-Data Format)
+
+#### Request
+
+```bash
+# Just coordinates
+curl -X POST https://computeragent.pro/api/chat \
+  -H "X-API-Key: your-api-key" \
+  -F "prompt=Find the submit button" \
+  -F "file=@screenshot.png"
+
+# With annotated image
+curl -X POST https://computeragent.pro/api/chat \
+  -H "X-API-Key: your-api-key" \
+  -F "prompt=Find the submit button" \
+  -F "file=@screenshot.png" \
+  -F "return_annotated_image=true"
+```
+
+#### Python Example (Form-Data)
+
 ```python
-import requests
+from form_client import FormDataClient
 
-url = "https://computeragent.pro/predict"
-headers = {
-    "X-API-Key": "your_api_key_here"
-}
+# Initialize client
+client = FormDataClient(api_key="your-api-key")
 
-with open("screenshot.jpg", "rb") as image_file:
-    files = {"file": image_file}
-    data = {"prompt": "Find the login button"}
-    
-    response = requests.post(url, files=files, data=data, headers=headers)
-    result = response.json()
+# Locate element (just coordinates)
+result = client.locate_element(
+    image_path="screenshot.png",
+    prompt="Find the submit button"
+)
+
+# Locate element (with annotated image)
+result_with_image = client.locate_element(
+    image_path="screenshot.png",
+    prompt="Find the submit button",
+    return_annotated_image=True
+)
+```
+
+### Element Location (JSON Format)
+
+#### Request
+
+```bash
+# Just coordinates
+curl -X POST https://computeragent.pro/api/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Find the submit button"},
+        {"type": "image_url", "image_url": "data:image/png;base64,..."}
+      ]
+    }]
+  }'
+
+# Just coordinates with inline base64 image encoding
+curl -X POST https://computeragent.pro/api/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: computeragent_prod_key_2024" \
+  -d "{
+    \"model\": \"OS-Copilot/OS-Atlas-Base-7B\",
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": [
+        {
+          \"type\": \"text\",
+          \"text\": \"Refresh Status\"
+        },
+        {
+          \"type\": \"image_url\",
+          \"image_url\": \"data:image/jpeg;base64,$(base64 -w 0 ./test_images/test_image_2.jpg)\"
+        }
+      ]
+    }],
+  }"
+
+# If you are on macOS, the base64 command does not support the -w 0 option, so you can use this instead:
+        {
+          \"type\": \"image_url\",
+          \"image_url\": \"data:image/jpeg;base64,$(base64 ./test_images/test_image_2.jpg | tr -d '\n')\"
+        }
+
+# With annotated image
+curl -X POST https://computeragent.pro/api/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Find the submit button"},
+        {"type": "image_url", "image_url": "data:image/png;base64,..."}
+      ]
+    }],
+    "return_annotated_image": true
+  }'
+```
+
+#### Python Example (JSON)
+
+```python
+from json_client import JSONClient
+
+# Initialize client
+client = JSONClient(api_key="your-api-key")
+
+# Locate element (just coordinates)
+result = client.locate_element(
+    image_path="screenshot.png",
+    prompt="Find the submit button"
+)
+
+# Locate element (with annotated image)
+result_with_image = client.locate_element(
+    image_path="screenshot.png",
+    prompt="Find the submit button",
+    return_annotated_image=True
+)
 ```
 
 ## Response Format
+
+### Success Response (Coordinates Only)
 ```json
 {
-  "status": "success",
-  "prediction": "[x1, y1, x2, y2]"
+    "prediction": "[[x1, y1, x2, y2]]"
 }
 ```
 
-### Response Fields
-- `status`: Request processing status ("success" or "error")
-- `prediction`: 
-  - Array of 4 float values representing bounding box coordinates
-  - Format: `[x_min, y_min, x_max, y_max]`
-  - Coordinates are scaled to the original image dimensions
-
-## Coordinate System
-- `x_min, y_min`: Top-left corner of the bounding box
-- `x_max, y_max`: Bottom-right corner of the bounding box
-- Coordinates are in pixels, relative to the original image size
-
-## Possible Responses
-1. Successful Coordinate Detection
+### Success Response (With Annotated Image)
 ```json
 {
-  "status": "success", 
-  "prediction": "[627.6, 692.17, 899.4, 757.25]"
+    "prediction": "[[x1, y1, x2, y2]]",
+    "annotated_image": "base64_encoded_image_data"
 }
 ```
 
-2. No Coordinates Found
+### Error Response
 ```json
 {
-  "status": "success", 
-  "prediction": "[]"
+    "detail": "Error message"
 }
 ```
 
-3. Error Response
-```json
-{
-  "status": "error",
-  "message": "Internal server error",
-  "detail": "Optional error details (in development mode)"
-}
-```
+## Rate Limits and Constraints
 
-## Prompt Engineering Tips
-- Be specific about the UI element you want to locate
-- Use clear, concise language
-- Examples:
-  - "Find the login button"
-  - "Locate the refresh status icon"
-  - "Where is the submit button?"
-
-## Error Handling
-- 400: Invalid file or request parameters
-- 401: Invalid API key
-- 500: Server-side processing errors
-- 503: Server overload
-
-## Notes
 - Maximum image size: 10MB
-- Supported image formats: JPEG, PNG, etc.
-- Coordinate precision may vary based on image/task complexity
+- Supported image formats: JPEG, PNG
+- Maximum prompt length: 500 characters
 
-## Practical Example: Automated UI Testing
+## Best Practices
 
-### Scenario
-Imagine you're building an automated testing framework for a web application. You want to programmatically interact with specific UI elements across different screen sizes and layouts.
+1. **Prompt Engineering**
+   - Be specific about the UI element you want to locate
+   - Use clear, concise language
+   - Example prompts:
+     - "Find the login button"
+     - "Locate the refresh status icon"
+     - "Where is the submit button?"
 
-### Sample Implementation in AI Framework
+2. **Image Preparation**
+   - Use clear, high-quality screenshots
+   - Ensure the target element is visible
+   - Optimize image size when possible
+
+3. **Error Handling**
+   - Implement proper error handling in your code
+   - Validate input parameters before making requests
+
+## Integration Examples
+
+### UI Automation Framework
 ```python
-import requests
+from json_client import JSONClient
 import pyautogui
 
-def find_and_click_element(screenshot_path, element_description):
-    """
-    Find UI element coordinates and perform an action
-    
-    Args:
-        screenshot_path (str): Path to the screenshot
-        element_description (str): Textual description of the element
-    
-    Returns:
-        dict: Coordinate information or None if element not found
-    """
-    url = "https://computeragent.pro/predict"
-    headers = {
-        "X-API-Key": "your_computeragent_api_key"
-    }
-    
-    with open(screenshot_path, "rb") as image_file:
-        files = {"file": image_file}
-        data = {"prompt": element_description}
+class UIAutomation:
+    def __init__(self, api_key: str):
+        self.vision_client = JSONClient(api_key)
         
-        response = requests.post(url, files=files, data=data, headers=headers)
-        result = response.json()
-    
-    if result['status'] == 'success' and result['prediction']:
-        coords = result['prediction']
-        # Calculate center of bounding box
-        center_x = (coords[0] + coords[2]) / 2
-        center_y = (coords[1] + coords[3]) / 2
-        
-        # Perform click action
+    def find_and_click(self, screenshot_path: str, element_description: str):
+        result = self.vision_client.locate_element(
+            image_path=screenshot_path,
+            prompt=element_description
+        )
+        coordinates = eval(result["prediction"])[0]
+        center_x = (coordinates[0] + coordinates[2]) / 2
+        center_y = (coordinates[1] + coordinates[3]) / 2
         pyautogui.click(center_x, center_y)
-        return {
-            "coordinates": coords,
-            "center": (center_x, center_y)
-        }
-    
-    return None
-
-# Example usage
-screenshot = "dashboard_screenshot.png"
-login_button_info = find_and_click_element(
-    screenshot, 
-    "Find the login button in this dashboard"
-)
-
-if login_button_info:
-    print(f"Login button found at: {login_button_info['coordinates']}")
-    print(f"Clicked at center point: {login_button_info['center']}")
-else:
-    print("Could not locate login button")
 ```
-
-### Key Takeaways
-- The API enables dynamic, prompt-based UI element location
-- Works across different UI layouts and screen sizes
-- Can be integrated into testing, automation, and accessibility tools
-- Supports complex, natural language element descriptions

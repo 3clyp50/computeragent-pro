@@ -7,10 +7,8 @@ import logging
 import base64
 from io import BytesIO
 import os
-
-# NEW import for streaming
-import threading
-from transformers import TextIteratorStreamer
+import re
+from typing import Union, Tuple, List
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -22,13 +20,6 @@ def image_to_base64(image):
     image.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return img_str
-
-def draw_bounding_boxes(image, bounding_boxes, outline_color="red", line_width=2):
-    draw = ImageDraw.Draw(image)
-    for box in bounding_boxes:
-        xmin, ymin, xmax, ymax = box
-        draw.rectangle([xmin, ymin, xmax, ymax], outline=outline_color, width=line_width)
-    return image
 
 def rescale_bounding_boxes(bounding_boxes, original_width, original_height, scaled_width=1000, scaled_height=1000):
     x_scale = original_width / scaled_width
@@ -92,6 +83,13 @@ class ModelInference:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {self.device}")
 
+    def draw_bounding_boxes(self, image, bounding_boxes, outline_color="red", line_width=2):
+        draw = ImageDraw.Draw(image)
+        for box in bounding_boxes:
+            xmin, ymin, xmax, ymax = box
+            draw.rectangle([xmin, ymin, xmax, ymax], outline=outline_color, width=line_width)
+        return image
+
     def warmup(self):
         """Perform model warmup inference"""
         try:
@@ -101,15 +99,45 @@ class ModelInference:
         except Exception as e:
             logger.error(f"Model warmup failed: {e}")
 
-    def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
+    def process_image_input(self, image_data: Union[str, bytes, Image.Image]) -> Image.Image:
+        """Process different types of image inputs into PIL Image"""
         try:
-            # Format prompt and messages similar to the example
+            if isinstance(image_data, Image.Image):
+                return image_data
+            
+            if isinstance(image_data, str):
+                # Handle base64 string
+                if image_data.startswith('data:image'):
+                    # Extract base64 data after the comma
+                    base64_data = re.sub('^data:image/.+;base64,', '', image_data)
+                else:
+                    base64_data = image_data
+                
+                image_bytes = base64.b64decode(base64_data)
+                return Image.open(BytesIO(image_bytes))
+            
+            if isinstance(image_data, bytes):
+                return Image.open(BytesIO(image_data))
+            
+            raise ValueError(f"Unsupported image data type: {type(image_data)}")
+            
+        except Exception as e:
+            logger.error(f"Error processing image input: {e}")
+            raise
+
+    def infer(self, image: Union[str, bytes, Image.Image], prompt: str) -> Tuple[str, List]:
+        """Updated infer method to handle multiple image input types"""
+        try:
+            # Process the image input
+            processed_image = self.process_image_input(image)
+            
+            # Continue with existing inference logic
             prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": f"data:image;base64,{image_to_base64(image)}"},
+                        {"type": "image", "image": f"data:image;base64,{image_to_base64(processed_image)}"},
                         {"type": "text", "text": prompt},
                     ],
                 }
@@ -160,31 +188,76 @@ class ModelInference:
                 logger.debug(f"Raw model output: {text}")
 
                 # Extract coordinates using regex patterns
-                import re
                 object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
                 box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
 
                 try:
-                    object_ref = re.search(object_ref_pattern, text).group(1)
-                    box_content = re.search(box_pattern, text).group(1)
+                    object_ref = re.search(object_ref_pattern, text)
+                    box_content = re.search(box_pattern, text)
+                    
+                    if not object_ref or not box_content:
+                        logger.warning("Could not find object reference or box coordinates in model output")
+                        return "", [[]]  # Return empty string and properly formatted empty box list
 
-                    # Parse coordinates in the same format as the example
-                    boxes = [tuple(map(int, pair.strip("()").split(','))) 
-                            for pair in box_content.split("),(")]
-                    boxes = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
+                    object_ref = object_ref.group(1)
+                    box_content = box_content.group(1)
+                    logger.debug(f"Raw box content before cleanup: {box_content}")
 
-                    # Scale boxes to image dimensions
-                    scaled_boxes = rescale_bounding_boxes(boxes, image.width, image.height)
+                    # Clean up the box content string and remove any unexpected characters
+                    box_content = re.sub(r'[\[\]]', '', box_content)
+                    logger.debug(f"Box content after cleanup: {box_content}")
+                    
+                    # First try parsing as a single array of 4 coordinates
+                    try:
+                        coords = [int(x.strip()) for x in box_content.split(',')]
+                        if len(coords) == 4:
+                            logger.debug(f"Successfully parsed single array format: {coords}")
+                            boxes = [coords]
+                            scaled_boxes = rescale_bounding_boxes(boxes, processed_image.width, processed_image.height)
+                            return object_ref, scaled_boxes
+                    except ValueError:
+                        logger.debug("Failed to parse as single array, trying pair format")
+                    
+                    # If that fails, try the pair format
+                    coord_pairs = box_content.split('),(')
+                    logger.debug(f"Split coordinate pairs: {coord_pairs}")
+                    coord_pairs = [pair.strip('()') for pair in coord_pairs]
+                    logger.debug(f"Cleaned coordinate pairs: {coord_pairs}")
+                    
+                    if len(coord_pairs) != 2:
+                        logger.warning(f"Failed to parse coordinates in either format. Got pairs: {coord_pairs}")
+                        return "", [[]]  # Return empty string and properly formatted empty box list
 
-                    # Draw boxes for visualization (optional)
-                    draw_bounding_boxes(image.copy(), scaled_boxes)
+                    try:
+                        # Parse each coordinate pair
+                        boxes = []
+                        for pair in coord_pairs:
+                            coords = [int(x.strip()) for x in pair.split(',')]
+                            if len(coords) != 2:
+                                raise ValueError(f"Invalid coordinate pair: {pair}")
+                            boxes.extend(coords)
 
-                    # Return object reference and scaled coordinates
-                    return object_ref, scaled_boxes
+                        if len(boxes) != 4:
+                            raise ValueError(f"Expected 4 coordinates, got {len(boxes)}")
+
+                        boxes = [boxes]  # Wrap in list to maintain expected format
+
+                        # Scale boxes to image dimensions
+                        scaled_boxes = rescale_bounding_boxes(boxes, processed_image.width, processed_image.height)
+
+                        # Draw boxes for visualization (optional)
+                        self.draw_bounding_boxes(processed_image.copy(), scaled_boxes)
+
+                        # Return object reference and scaled coordinates
+                        return object_ref, scaled_boxes
+
+                    except (AttributeError, IndexError, ValueError) as e:
+                        logger.error(f"Error parsing model output: {e}")
+                        return "", [[]]  # Return empty string and properly formatted empty box list
 
                 except (AttributeError, IndexError, ValueError) as e:
                     logger.error(f"Error parsing model output: {e}")
-                    return text, []
+                    return "", [[]]  # Return empty string and properly formatted empty box list
 
             except Exception as e:
                 logger.error(f"Error processing output: {e}")
@@ -192,73 +265,4 @@ class ModelInference:
 
         except Exception as e:
             logger.error(f"Inference error: {e}")
-            raise e
-
-    def stream_infer(self, image: Image.Image, prompt: str):
-        """
-        Streaming inference method – yields partial tokens as they are generated.
-        Bounding-box extraction typically requires the *full* output, so we omit it here.
-        If you want to parse bounding boxes, you should do so after collecting all tokens.
-        """
-        try:
-            # Format prompt and messages
-            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": f"data:image;base64,{image_to_base64(image)}"},
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ]
-
-            # Process text input
-            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-            # Prepare model inputs
-            image_inputs, video_inputs = process_vision_info(messages)
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt"
-            )
-            inputs = inputs.to(self.device)
-
-            # Create a streamer for partial token output
-            # Note: Qwen2VL's AutoProcessor may not include a 'tokenizer' property by default.
-            # If that's the case, you might need to load or create a tokenizer manually.
-            tokenizer = self.processor.tokenizer
-
-            streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=False)
-
-            # We run generate in a separate thread so we can yield tokens as they arrive
-            generation_kwargs = {
-                **inputs,
-                "max_new_tokens": 128,
-                "streamer": streamer
-            }
-
-            def _generate():
-                with torch.no_grad():
-                    self.model.generate(**generation_kwargs)
-
-            thread = threading.Thread(target=_generate)
-            thread.start()
-
-            # Iterate over tokens from the streamer
-            for new_text in streamer:
-                # Each `new_text` is typically the next token (or group of tokens).
-                # Yield it immediately to the client.
-                yield new_text
-
-            # Ensure the thread is done
-            thread.join()
-
-        except Exception as e:
-            logger.error(f"Streaming inference error: {e}")
-            # In case of error, yield or raise
-            yield f"[ERROR] {str(e)}"
             raise e
