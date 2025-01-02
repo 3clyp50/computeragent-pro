@@ -135,22 +135,22 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
 
                 if not coordinates:
                     logger.warning("No coordinates found")
-                    response = InferenceResponse(
-                        status="success",
-                        prediction="[]",  # Return empty list when no coordinates found
-                        annotated_image=None
-                    )
+                    response_dict = {
+                        "status": "success",
+                        "prediction": "[]",  # Return empty list when no coordinates found
+                        "annotated_image": None
+                    }
                 else:
                     # Create annotated image
                     annotated_image = image_to_base64(draw_bounding_boxes(image.copy(), coordinates))
-                    response = InferenceResponse(
-                        status="success",
-                        prediction=str(coordinates),
-                        annotated_image=annotated_image
-                    )
+                    response_dict = {
+                        "status": "success",
+                        "prediction": str(coordinates),
+                        "annotated_image": annotated_image
+                    }
                     
-                logger.info(f"Preparing response with data: {response.dict()}")
-                return response
+                logger.info(f"Preparing response with data: {response_dict}")
+                return InferenceResponse(**response_dict)
             except Exception as e:
                 logger.error(f"Error during inference: {e}")
                 raise HTTPException(

@@ -19,6 +19,16 @@ class ChatRequest(BaseModel):
     tools: Optional[List[Any]] = []
 
 class InferenceResponse(BaseModel):
-    status: str
-    prediction: str
-    annotated_image: Optional[str] = None  # Base64 encoded image with bounding boxes
+    status: str = Field(..., description="Status of the inference response")
+    prediction: str = Field(..., description="Prediction result as a string")
+    annotated_image: Optional[str] = Field(None, description="Base64 encoded image with bounding boxes")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "success",
+                "prediction": "[[100, 200, 300, 400]]",
+                "annotated_image": "base64_encoded_string"
+            }
+        }
+        validate_assignment = True
