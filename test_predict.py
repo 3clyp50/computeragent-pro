@@ -34,6 +34,9 @@ def encode_image(image_path):
         pytest.fail(f"Failed to encode image: {str(e)}")
 
 def test_non_streaming(api_url, api_key):
+    # Print test configuration
+    print(f"\nTesting non-streaming endpoint: {api_url}")
+    
     payload = {
         "stream": False,
         "options": {},
@@ -58,20 +61,34 @@ def test_non_streaming(api_url, api_key):
     }
 
     try:
-        response = requests.post(api_url, headers=headers, json=payload)
+        print("Sending request...")
+        response = requests.post(api_url, headers=headers, data=json.dumps(payload))
+        print(f"Response status code: {response.status_code}")
+        print(f"Response headers: {dict(response.headers)}")
+        
+        # Print raw response content for debugging
+        print(f"Raw response content: {response.content[:1000]}...")  # First 1000 chars
+        
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         pytest.fail(f"Request failed: {str(e)}")
 
     try:
+        if not response.content:
+            pytest.fail("Empty response received from server")
+            
         result = response.json()
+        print(f"Parsed JSON response: {result}")
+        
         prediction = ast.literal_eval(result['prediction'])
         assert isinstance(prediction, list), "Prediction should be a list"
         print(f"Coordinates: {prediction}")
     except (json.JSONDecodeError, KeyError, ValueError) as e:
-        pytest.fail(f"Failed to parse response: {str(e)}")
+        pytest.fail(f"Failed to parse response: {str(e)}\nRaw response: {response.text}")
 
 def test_streaming(api_url, api_key):
+    print(f"\nTesting streaming endpoint: {api_url}")
+    
     payload = {
         "stream": True,
         "options": {},
@@ -96,14 +113,18 @@ def test_streaming(api_url, api_key):
     }
 
     try:
-        response = requests.post(api_url, headers=headers, json=payload, stream=True)
+        print("Sending streaming request...")
+        response = requests.post(api_url, headers=headers, data=json.dumps(payload), stream=True)
+        print(f"Response status code: {response.status_code}")
+        print(f"Response headers: {dict(response.headers)}")
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         pytest.fail(f"Streaming request failed: {str(e)}")
 
     try:
+        print("Reading stream...")
         for chunk in response.iter_lines(decode_unicode=True):
             if chunk:
-                print(chunk)
+                print(f"Received chunk: {chunk}")
     except Exception as e:
         pytest.fail(f"Failed to process stream: {str(e)}")

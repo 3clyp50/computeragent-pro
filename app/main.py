@@ -125,29 +125,37 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
 
         if chat_request.stream:
             logger.info("Starting streaming inference from /api/chat")
-
             token_generator = model_inference.stream_infer(image, prompt)
             return StreamingResponse(token_generator, media_type="text/plain")
         else:
             logger.info("Starting normal (non-streaming) inference from /api/chat")
-            object_ref, coordinates = model_inference.infer(image, prompt)
+            try:
+                object_ref, coordinates = model_inference.infer(image, prompt)
+                logger.info(f"Inference completed. Object ref: {object_ref}, Coordinates: {coordinates}")
 
-            if not coordinates:
-                logger.warning("No coordinates found")
-                return InferenceResponse(
-                    status="success",
-                    prediction="[]",  # Return empty list when no coordinates found
-                    annotated_image=None
+                if not coordinates:
+                    logger.warning("No coordinates found")
+                    response = InferenceResponse(
+                        status="success",
+                        prediction="[]",  # Return empty list when no coordinates found
+                        annotated_image=None
+                    )
+                else:
+                    # Create annotated image
+                    annotated_image = image_to_base64(draw_bounding_boxes(image.copy(), coordinates))
+                    response = InferenceResponse(
+                        status="success",
+                        prediction=str(coordinates),
+                        annotated_image=annotated_image
+                    )
+                logger.info("Sending response")
+                return response
+            except Exception as e:
+                logger.error(f"Error during inference: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=str(e)
                 )
-
-            # Optionally, you can return an annotated image
-            annotated_image = image_to_base64(draw_bounding_boxes(image.copy(), coordinates))
-
-            return InferenceResponse(
-                status="success",
-                prediction=str(coordinates),
-                annotated_image=annotated_image
-            )
 
     except HTTPException:
         raise
