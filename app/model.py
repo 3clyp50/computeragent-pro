@@ -107,6 +107,8 @@ class ModelInference:
         try:
             # Format prompt and messages similar to the example
             prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
+            logger.info(f"Formatted prompt: {prompt}")
+            
             messages = [
                 {
                     "role": "user",
@@ -130,6 +132,7 @@ class ModelInference:
 
             # Process inputs and generate output
             try:
+                logger.info("Processing image inputs...")
                 image_inputs, video_inputs = process_vision_info(messages)
                 inputs = self.processor(
                     text=[text],
@@ -139,12 +142,15 @@ class ModelInference:
                     return_tensors="pt"
                 )
                 inputs = inputs.to(self.device)
+                logger.info("Inputs processed and moved to device")
 
+                logger.info("Starting model generation...")
                 with torch.no_grad():
                     generated_ids = self.model.generate(
                         **inputs,
                         max_new_tokens=128
                     )
+                logger.info("Model generation completed")
 
                 generated_ids_trimmed = [
                     out_ids[len(in_ids):] 
@@ -159,7 +165,7 @@ class ModelInference:
 
                 # Process output text
                 text = output_text[0]
-                logger.debug(f"Raw model output: {text}")
+                logger.info(f"Raw model output: {text}")
 
                 # Extract coordinates using regex patterns
                 import re

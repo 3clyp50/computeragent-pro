@@ -148,7 +148,8 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
                         prediction=str(coordinates),
                         annotated_image=annotated_image
                     )
-                logger.info("Sending response")
+                    
+                logger.info(f"Preparing response with data: {response.dict()}")
                 return response
             except Exception as e:
                 logger.error(f"Error during inference: {e}")
