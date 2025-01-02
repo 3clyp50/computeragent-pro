@@ -1,22 +1,8 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Any
-from .config import settings
+from pydantic import BaseModel
+from typing import Optional
 
-class ChatImage(BaseModel):
-    content: str = Field(..., description="Base64 encoded image string.")
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-    images: Optional[List[ChatImage]] = []
-
-class ChatRequest(BaseModel):
-    # Required fields
-    stream: bool
-    options: Optional[Dict[str, Any]] = {}
-    format: Optional[str] = ""
-    messages: List[ChatMessage]
-    tools: Optional[List[Any]] = []
+class InferenceRequest(BaseModel):
+    prompt: str
 
 class InferenceResponse(BaseModel):
     status: str

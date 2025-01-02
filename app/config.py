@@ -13,9 +13,6 @@ class Settings(BaseSettings):
     DOMAIN_NAME: str = Field("computeragent.pro", env="DOMAIN_NAME")
     ENVIRONMENT: str = Field("development", env="ENVIRONMENT")  # or "production"
 
-    # Request URL
-    BASE_URL: str = Field("https://computeragent.pro/api/chat", env="BASE_URL")
-
     # Security
     AI_AGENT_KEY: Optional[str] = Field(None, env="AI_AGENT_KEY")  # Optional: Set in production
 
