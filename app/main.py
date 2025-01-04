@@ -70,8 +70,8 @@ async def health_check():
 @app.post("/api/chat", response_model=InferenceResponse)
 async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_api_key)):
     """
-    Handles chat requests by replacing the /predict endpoint.
-    Accepts JSON payload with base64-encoded images.
+    Handles chat requests with OpenAI-style message format.
+    Accepts JSON payload with text and base64-encoded images.
     """
     try:
         if not chat_request.messages:
@@ -80,19 +80,38 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
                 detail="No messages provided in the request."
             )
 
-        # Assuming the first message contains the user prompt and image
-        user_message = chat_request.messages[0]
-        prompt = user_message.content.strip()
-
-        if not user_message.images:
+        # Get the last user message
+        user_message = next(
+            (msg for msg in reversed(chat_request.messages) if msg.role == "user"),
+            None
+        )
+        if not user_message:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No images found in the request."
+                detail="No user message found in the request."
             )
 
-        # Decode the first base64 image
-        base64_str = user_message.images[0].content
+        # Extract text and image from the message content
+        text_content = next(
+            (content for content in user_message.content if content.type == "text"),
+            None
+        )
+        image_content = next(
+            (content for content in user_message.content if content.type == "image_url"),
+            None
+        )
+
+        if not text_content or not image_content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Message must contain both text and image content."
+            )
+
+        prompt = text_content.text.strip()
+
+        # Extract and decode base64 image
         try:
+            base64_str = image_content.image_url.url.split("base64,")[1]
             image_data = base64.b64decode(base64_str)
         except Exception as e:
             logger.error(f"Error decoding base64 image: {e}")
@@ -136,7 +155,6 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
                 if not coordinates:
                     logger.warning("No coordinates found")
                     response_dict = {
-                        "status": "success",
                         "prediction": "[]",  # Return empty list when no coordinates found
                         "annotated_image": None
                     }
@@ -144,7 +162,6 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
                     # Create annotated image
                     annotated_image = image_to_base64(draw_bounding_boxes(image.copy(), coordinates))
                     response_dict = {
-                        "status": "success",
                         "prediction": str(coordinates),
                         "annotated_image": annotated_image
                     }
@@ -166,7 +183,6 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
-                "status": "error",
                 "message": "Internal server error",
                 "detail": error_msg if settings.ENVIRONMENT == "development" else None
             }
@@ -179,7 +195,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={
-            "status": "error",
             "message": "Internal server error",
             "detail": str(exc) if settings.ENVIRONMENT == "development" else None
         }

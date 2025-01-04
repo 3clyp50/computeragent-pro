@@ -5,7 +5,7 @@ from qwen_vl_utils import process_vision_info
 from .config import settings
 import logging
 import base64
-from typing import List
+from typing import List, Dict, Any
 from io import BytesIO
 import os
 
@@ -22,7 +22,7 @@ def image_to_base64(image: Image.Image) -> str:
     buffered = BytesIO()
     image.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    return img_str
+    return f"data:image/png;base64,{img_str}"
 
 def draw_bounding_boxes(image: Image.Image, bounding_boxes: List[List[int]], 
                        outline_color: str = "red", line_width: int = 2) -> Image.Image:
@@ -113,8 +113,8 @@ class ModelInference:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": f"data:image;base64,{image_to_base64(image)}"},
                         {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_to_base64(image)}},
                     ],
                 }
             ]
@@ -184,9 +184,6 @@ class ModelInference:
                     # Scale boxes to image dimensions
                     scaled_boxes = rescale_bounding_boxes(boxes, image.width, image.height)
 
-                    # Draw boxes for visualization (optional)
-                    draw_bounding_boxes(image.copy(), scaled_boxes)
-
                     # Return object reference and scaled coordinates
                     return object_ref, scaled_boxes
 
@@ -205,8 +202,6 @@ class ModelInference:
     def stream_infer(self, image: Image.Image, prompt: str):
         """
         Streaming inference method – yields partial tokens as they are generated.
-        Bounding-box extraction typically requires the *full* output, so we omit it here.
-        If you want to parse bounding boxes, you should do so after collecting all tokens.
         """
         try:
             # Format prompt and messages
@@ -215,8 +210,8 @@ class ModelInference:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": f"data:image;base64,{image_to_base64(image)}"},
                         {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_to_base64(image)}},
                     ],
                 }
             ]
@@ -236,10 +231,7 @@ class ModelInference:
             inputs = inputs.to(self.device)
 
             # Create a streamer for partial token output
-            # Note: Qwen2VL's AutoProcessor may not include a 'tokenizer' property by default.
-            # If that's the case, you might need to load or create a tokenizer manually.
             tokenizer = self.processor.tokenizer
-
             streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=False)
 
             # We run generate in a separate thread so we can yield tokens as they arrive
@@ -258,8 +250,6 @@ class ModelInference:
 
             # Iterate over tokens from the streamer
             for new_text in streamer:
-                # Each `new_text` is typically the next token (or group of tokens).
-                # Yield it immediately to the client.
                 yield new_text
 
             # Ensure the thread is done
@@ -267,6 +257,5 @@ class ModelInference:
 
         except Exception as e:
             logger.error(f"Streaming inference error: {e}")
-            # In case of error, yield or raise
             yield f"[ERROR] {str(e)}"
             raise e
