@@ -1,17 +1,31 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, List, Any, Union, Literal
 from .config import settings
-
-class ImageUrl(BaseModel):
-    url: str = Field(..., description="Base64 image URL in format data:image/jpeg;base64,{base64_string}")
+import requests
+import base64
+from io import BytesIO
 
 class TextContent(BaseModel):
     type: Literal["text"] = "text"
     text: str = Field(..., description="Text content")
 
 class ImageContent(BaseModel):
-    type: Literal["image_url"] = "image_url"
-    image_url: ImageUrl
+    type: Literal["image"] = "image"
+    image: str = Field(..., description="Path to the image file or URL")
+    is_url: bool = Field(default=False, description="Whether the image field is a URL")
+
+    @validator('image')
+    def validate_and_process_image(cls, v, values):
+        if values.get('is_url', False):
+            try:
+                response = requests.get(v)
+                response.raise_for_status()
+                # Convert to base64
+                image_data = base64.b64encode(response.content).decode('utf-8')
+                return f"data:image/jpeg;base64,{image_data}"
+            except Exception as e:
+                raise ValueError(f"Failed to fetch or process image URL: {str(e)}")
+        return v
 
 class ChatMessage(BaseModel):
     role: str = Field(..., description="Role of the message sender (e.g., 'user', 'assistant')")

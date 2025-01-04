@@ -1,19 +1,14 @@
 import logging
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, status, Request, Depends
+from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.requests import Request
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
 from .config import settings
 from .model import ModelInference, draw_bounding_boxes, image_to_base64
 from .schemas import ChatRequest, InferenceResponse
-import base64
 from PIL import Image
-import io
 from io import BytesIO
-
+import base64
 
 # Initialize logger
 logger = logging.getLogger("uvicorn.error")
@@ -47,9 +42,9 @@ app = FastAPI(title="OS-Atlas Vision API")
 
 # Configure CORS
 if settings.ENVIRONMENT == "development":
-    origins = ["*"]  # Allow all for local development
+    origins = ["*"]
 else:
-    origins = [settings.DOMAIN_NAME]  # Restrict in production
+    origins = [settings.DOMAIN_NAME]
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,7 +60,6 @@ model_inference = ModelInference()
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "ok", "environment": settings.ENVIRONMENT}
-
 
 @app.post("/api/chat", response_model=InferenceResponse)
 async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_api_key)):
@@ -97,7 +91,7 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
             None
         )
         image_content = next(
-            (content for content in user_message.content if content.type == "image_url"),
+            (content for content in user_message.content if content.type == "image"),
             None
         )
 
@@ -108,33 +102,22 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
             )
 
         prompt = text_content.text.strip()
+        image_path = image_content.image
 
-        # Extract and decode base64 image
+        # Handle image input
         try:
-            base64_str = image_content.image_url.url.split("base64,")[1]
-            image_data = base64.b64decode(base64_str)
+            if image_content.is_url:
+                # For URLs, the image is already base64 encoded by the schema validator
+                image_data = base64.b64decode(image_path.split('base64,')[1])
+                image = Image.open(BytesIO(image_data))
+            else:
+                # For local files
+                image = Image.open(image_path)
         except Exception as e:
-            logger.error(f"Error decoding base64 image: {e}")
+            logger.error(f"Image processing error: {e}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid base64 encoding for image."
-            )
-
-        # Check file size (e.g., 10MB limit)
-        if len(image_data) > 10 * 1024 * 1024:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Image size too large. Maximum size is 10MB."
-            )
-
-        # Open the image
-        try:
-            image = Image.open(BytesIO(image_data))
-        except Exception as e:
-            logger.error(f"Image open error: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not open the provided image. Possibly corrupted or invalid format."
+                detail="Could not process the provided image. Either the file is invalid/missing or the URL is inaccessible."
             )
 
         # Truncate prompt if necessary
@@ -142,38 +125,33 @@ async def chat_endpoint(chat_request: ChatRequest, api_key: str = Depends(get_ap
             logger.warning("Prompt too long, truncating")
             prompt = prompt[:500]
 
-        if chat_request.stream:
-            logger.info("Starting streaming inference from /api/chat")
-            token_generator = model_inference.stream_infer(image, prompt)
-            return StreamingResponse(token_generator, media_type="text/plain")
-        else:
-            logger.info("Starting normal (non-streaming) inference from /api/chat")
-            try:
-                object_ref, coordinates = model_inference.infer(image, prompt)
-                logger.info(f"Inference completed. Object ref: {object_ref}, Coordinates: {coordinates}")
+        logger.info("Starting inference from /api/chat")
+        try:
+            object_ref, coordinates = model_inference.infer(image, prompt)
+            logger.info(f"Inference completed. Object ref: {object_ref}, Coordinates: {coordinates}")
 
-                if not coordinates:
-                    logger.warning("No coordinates found")
-                    response_dict = {
-                        "prediction": "[]",  # Return empty list when no coordinates found
-                        "annotated_image": None
-                    }
-                else:
-                    # Create annotated image
-                    annotated_image = image_to_base64(draw_bounding_boxes(image.copy(), coordinates))
-                    response_dict = {
-                        "prediction": str(coordinates),
-                        "annotated_image": annotated_image
-                    }
-                    
-                logger.info(f"Preparing response with data: {response_dict}")
-                return InferenceResponse(**response_dict)
-            except Exception as e:
-                logger.error(f"Error during inference: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=str(e)
-                )
+            if not coordinates:
+                logger.warning("No coordinates found")
+                response_dict = {
+                    "prediction": "[]",
+                    "annotated_image": None
+                }
+            else:
+                # Create annotated image
+                annotated_image = image_to_base64(draw_bounding_boxes(image.copy(), coordinates))
+                response_dict = {
+                    "prediction": str(coordinates),
+                    "annotated_image": annotated_image
+                }
+                
+            logger.info(f"Preparing response with data: {response_dict}")
+            return InferenceResponse(**response_dict)
+        except Exception as e:
+            logger.error(f"Error during inference: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
 
     except HTTPException:
         raise

@@ -9,10 +9,6 @@ from typing import List, Dict, Any
 from io import BytesIO
 import os
 
-# NEW import for streaming
-import threading
-from transformers import TextIteratorStreamer
-
 logger = logging.getLogger("uvicorn.error")
 
 def get_cache_dir():
@@ -78,7 +74,6 @@ class ModelInference:
 
         try:
             logger.info(f"Loading processor for model: {settings.MODEL_NAME}")
-            # Try to load processor from cache
             if os.path.exists(local_model_path):
                 logger.info("Loading processor from cache")
                 self.processor = AutoProcessor.from_pretrained(local_model_path, local_files_only=True)
@@ -90,7 +85,6 @@ class ModelInference:
             logger.error(f"Failed to load processor: {e}")
             raise e
 
-        # Determine device
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {self.device}")
 
@@ -104,122 +98,33 @@ class ModelInference:
             logger.error(f"Model warmup failed: {e}")
 
     def infer(self, image: Image.Image, prompt: str) -> tuple[str, list]:
+        """Make inference with the model."""
         try:
-            # Format prompt and messages similar to the example
-            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
-            logger.info(f"Formatted prompt: {prompt}")
+            logger.info(f"Processing prompt: {prompt}")
+            
+            # Save image temporarily
+            temp_image_path = "temp_image.jpg"
+            image.save(temp_image_path)
             
             messages = [
                 {
                     "role": "user",
                     "content": [
+                        {"type": "image", "image": temp_image_path},
                         {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": image_to_base64(image)}},
                     ],
                 }
             ]
             logger.debug("Messages formatted")
 
             # Process text input
-            try:
-                text = self.processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-                logger.debug(f"Chat template applied: {text[:100]}...")
-            except Exception as e:
-                logger.error(f"Error applying chat template: {e}")
-                raise
+            text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            logger.debug(f"Chat template applied: {text[:100]}...")
 
             # Process inputs and generate output
-            try:
-                logger.info("Processing image inputs...")
-                image_inputs, video_inputs = process_vision_info(messages)
-                inputs = self.processor(
-                    text=[text],
-                    images=image_inputs,
-                    videos=video_inputs,
-                    padding=True,
-                    return_tensors="pt"
-                )
-                inputs = inputs.to(self.device)
-                logger.info("Inputs processed and moved to device")
-
-                logger.info("Starting model generation...")
-                with torch.no_grad():
-                    generated_ids = self.model.generate(
-                        **inputs,
-                        max_new_tokens=128
-                    )
-                logger.info("Model generation completed")
-
-                generated_ids_trimmed = [
-                    out_ids[len(in_ids):] 
-                    for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-                ]
-
-                output_text = self.processor.batch_decode(
-                    generated_ids_trimmed,
-                    skip_special_tokens=False,
-                    clean_up_tokenization_spaces=False
-                )
-
-                # Process output text
-                text = output_text[0]
-                logger.info(f"Raw model output: {text}")
-
-                # Extract coordinates using regex patterns
-                import re
-                object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
-                box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
-
-                try:
-                    object_ref = re.search(object_ref_pattern, text).group(1)
-                    box_content = re.search(box_pattern, text).group(1)
-
-                    # Parse coordinates in the same format as the example
-                    boxes = [tuple(map(int, pair.strip("()").split(','))) 
-                            for pair in box_content.split("),(")]
-                    boxes = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
-
-                    # Scale boxes to image dimensions
-                    scaled_boxes = rescale_bounding_boxes(boxes, image.width, image.height)
-
-                    # Return object reference and scaled coordinates
-                    return object_ref, scaled_boxes
-
-                except (AttributeError, IndexError, ValueError) as e:
-                    logger.error(f"Error parsing model output: {e}")
-                    return text, []
-
-            except Exception as e:
-                logger.error(f"Error processing output: {e}")
-                raise
-
-        except Exception as e:
-            logger.error(f"Inference error: {e}")
-            raise e
-
-    def stream_infer(self, image: Image.Image, prompt: str):
-        """
-        Streaming inference method – yields partial tokens as they are generated.
-        """
-        try:
-            # Format prompt and messages
-            prompt = f"In this UI screenshot, what is the position of the element corresponding to the command \"{prompt}\" (with bbox)?"
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": image_to_base64(image)}},
-                    ],
-                }
-            ]
-
-            # Process text input
-            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-            # Prepare model inputs
+            logger.info("Processing image inputs...")
             image_inputs, video_inputs = process_vision_info(messages)
             inputs = self.processor(
                 text=[text],
@@ -229,33 +134,52 @@ class ModelInference:
                 return_tensors="pt"
             )
             inputs = inputs.to(self.device)
+            logger.info("Inputs processed and moved to device")
 
-            # Create a streamer for partial token output
-            tokenizer = self.processor.tokenizer
-            streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=False)
+            # Generate output
+            logger.info("Starting model generation...")
+            with torch.no_grad():
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=128
+                )
+            logger.info("Model generation completed")
 
-            # We run generate in a separate thread so we can yield tokens as they arrive
-            generation_kwargs = {
-                **inputs,
-                "max_new_tokens": 128,
-                "streamer": streamer
-            }
+            # Process output
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):] 
+                for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+            ]
 
-            def _generate():
-                with torch.no_grad():
-                    self.model.generate(**generation_kwargs)
+            output_text = self.processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False
+            )
 
-            thread = threading.Thread(target=_generate)
-            thread.start()
+            # Extract coordinates
+            text = output_text[0]
+            logger.info(f"Raw model output: {text}")
 
-            # Iterate over tokens from the streamer
-            for new_text in streamer:
-                yield new_text
+            import re
+            object_ref_pattern = r"<\|object_ref_start\|>(.*?)<\|object_ref_end\|>"
+            box_pattern = r"<\|box_start\|>(.*?)<\|box_end\|>"
 
-            # Ensure the thread is done
-            thread.join()
+            try:
+                object_ref = re.search(object_ref_pattern, text).group(1)
+                box_content = re.search(box_pattern, text).group(1)
+
+                boxes = [tuple(map(int, pair.strip("()").split(','))) 
+                        for pair in box_content.split("),(")]
+                boxes = [[boxes[0][0], boxes[0][1], boxes[1][0], boxes[1][1]]]
+
+                scaled_boxes = rescale_bounding_boxes(boxes, image.width, image.height)
+                return object_ref, scaled_boxes
+
+            except (AttributeError, IndexError, ValueError) as e:
+                logger.error(f"Error parsing model output: {e}")
+                return text, []
 
         except Exception as e:
-            logger.error(f"Streaming inference error: {e}")
-            yield f"[ERROR] {str(e)}"
+            logger.error(f"Inference error: {e}")
             raise e
