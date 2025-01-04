@@ -1,86 +1,65 @@
 import requests
 import json
-import base64
-import ast
 import os
+from dotenv import load_dotenv
 
-def api_key():
-    return os.getenv('AI_AGENT_KEY', 'Missing API key')
+# Load environment variables
+load_dotenv()
+
+BASE_URL = "https://computeragent.pro/api/chat"
 
 def get_coordinates(image_path: str, prompt: str, stream: bool = False):
-    url = os.getenv('BASE_URL')  # Updated endpoint
-
+    """Make API request and handle response."""
     try:
-        # Read and encode the image in base64
+        # Read the image file
         with open(image_path, 'rb') as img_file:
-            encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
+            image_data = img_file.read()
 
-        # Construct the JSON payload
+        # Request payload
         payload = {
             "stream": stream,
-            "options": {},  # Add any specific options if needed
-            "format": "",
             "messages": [
                 {
                     "role": "user",
-                    "content": prompt,
-                    "images": [
+                    "content": [
                         {
-                            "content": encoded_image
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_data
+                            }
                         }
                     ]
                 }
-            ],
-            "tools": []  # Add any tools if needed
+            ]
         }
 
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": api_key()
+            "X-API-Key": os.getenv('AI_AGENT_KEY')
         }
 
-        if stream:
-            # Handle streaming response
-            response = requests.post(
-                url,
-                headers=headers,
-                data=json.dumps(payload),
-                stream=True,
-                verify=True
-            )
+        response = requests.post(
+            BASE_URL,
+            headers=headers,
+            json=payload,
+            stream=stream
+        )
 
-            if response.status_code == 200:
-                # Assuming streaming returns plain text
-                for chunk in response.iter_content(chunk_size=1024):
-                    if chunk:
-                        print(chunk.decode('utf-8'))
-            else:
-                print(f"Error: {response.status_code} - {response.text}")
+        if response.status_code == 200:
+            if stream:
+                return response
+            return response.json()['prediction']
         else:
-            # Handle non-streaming response
-            response = requests.post(
-                url,
-                headers=headers,
-                data=json.dumps(payload),
-                verify=True # Verify SSL
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                # Extract coordinates from prediction string
-                # Assuming prediction is a string representation of a list: "[(x1, y1, x2, y2)]"
-                try:
-                    prediction = ast.literal_eval(result['prediction'])
-                    coordinates = prediction[0] if prediction else []
-                except Exception as e:
-                    print(f"Error parsing prediction: {e}")
-                    coordinates = []
-                print(f"Coordinates: {coordinates}")
-            else:
-                print(f"Error: {response.status_code} - {response.text}")
+            print(f"Error: {response.status_code} - {response.text}")
+            return None
 
     except Exception as e:
         print(f"Error: {e}")
+        return None
 
 if __name__ == "__main__":
     # Example usage:
