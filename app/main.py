@@ -69,7 +69,7 @@ model_inference = ModelInference()
 async def health_check():
     return {"status": "ok", "environment": settings.ENVIRONMENT}
 
-@app.post("/api/chat", response_model=Union[InferenceResponse, ChatResponse])
+@app.post("/v1/chat/completions", response_model=Union[InferenceResponse, ChatResponse])
 async def chat_endpoint(
     request: Request,
     chat_request: Optional[ChatRequest] = None,
