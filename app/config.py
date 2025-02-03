@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     API_PORT: int = Field(8000, env="API_PORT")
 
     # Domain and environment settings
-    DOMAIN_NAME: str = Field("computeragent.pro", env="DOMAIN_NAME")
+    DOMAIN_NAME: str = Field("api.computeragent.pro", env="DOMAIN_NAME")
     ENVIRONMENT: str = Field("development", env="ENVIRONMENT")  # or "production"
 
     # Security
